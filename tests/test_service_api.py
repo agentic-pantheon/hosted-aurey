@@ -153,6 +153,37 @@ def test_invoke_misconfigured_returns_stable_error(monkeypatch):
     assert "vault" not in body["error"]["message"].lower()
 
 
+def test_well_known_jwks_not_configured_returns_404(monkeypatch):
+    st = _service_state(monkeypatch)
+    with TestClient(create_fastapi_application(state=st)) as client:
+        r = client.get("/.well-known/jwks.json")
+    assert r.status_code == 404
+
+
+def test_well_known_jwks_served_when_oidc_signer_present(monkeypatch):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from aurey.cloud.oidc import OidcSubjectTokenSigner
+
+    st = _service_state(monkeypatch)
+    pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    st.oidc_signer = OidcSubjectTokenSigner.from_pem(
+        pem, issuer="https://issuer.example", default_audience="app_x"
+    )
+    with TestClient(create_fastapi_application(state=st)) as client:
+        r = client.get("/.well-known/jwks.json")
+        oidc = client.get("/.well-known/openid-configuration")
+    assert r.status_code == 200
+    assert "keys" in r.json()
+    assert oidc.status_code == 200
+    assert oidc.json()["issuer"] == "https://issuer.example"
+
+
 def test_invoke_agent_invoke_failure_is_generic(monkeypatch):
     st = _service_state(monkeypatch)
 

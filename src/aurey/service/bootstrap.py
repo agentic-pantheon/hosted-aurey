@@ -55,6 +55,55 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
 
     default_model = (s.deep_agent_default_model or "").strip() or "openai:gpt-4o-mini"
 
+    cloud_db_engine = None
+    db_session_factory = None
+    onboarding = None
+    oidc_signer = None
+    if s.cloud_onboarding_configured():
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from aurey.cloud.oidc import OidcSubjectTokenSigner
+        from aurey.cloud.onboarding import OnboardingService
+        from aurey.cloud.platform import OneClawPlatformApiClient
+
+        db_url = (s.database_url or "").strip()
+        if not db_url:
+            raise AureyServiceBootstrapError(
+                "Cloud onboarding requires DATABASE_URL / AUREY_DATABASE_URL."
+            )
+
+        pem = s.resolve_oidc_rsa_private_key_pem_optional()
+        plt_key = s.resolve_plt_app_api_key_optional()
+        if pem is None:
+            raise AureyServiceBootstrapError(
+                "Cloud onboarding requires an RSA subject-token key PEM source."
+            )
+        if plt_key is None:
+            raise AureyServiceBootstrapError(
+                "Cloud onboarding requires a platform API key source."
+            )
+
+        cloud_db_engine = create_engine(db_url, pool_pre_ping=True)
+        db_session_factory = sessionmaker(bind=cloud_db_engine, expire_on_commit=False)
+
+        issuer = (s.oidc_issuer or "").strip().rstrip("/")
+        audience = (s.subject_token_audience or "").strip() or (s.plt_app_id or "").strip()
+        oidc_signer = OidcSubjectTokenSigner.from_pem(pem, issuer=issuer, default_audience=audience)
+
+        platform_http = UrllibHttpJsonClient()
+        platform = OneClawPlatformApiClient(
+            base_url=s.plt_oneclaw_base_url.strip(),
+            api_key=plt_key,
+            http=platform_http,
+        )
+        onboarding = OnboardingService(
+            settings=s,
+            session_factory=db_session_factory,
+            platform=platform,
+            oidc=oidc_signer,
+        )
+
     db_url = (s.database_url or "").strip()
     if db_url:
         try:
@@ -69,6 +118,10 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
             checkpointer=pg.saver,
             default_model=default_model,
             _postgres=pg,
+            cloud_db_engine=cloud_db_engine,
+            db_session_factory=db_session_factory,
+            onboarding=onboarding,
+            oidc_signer=oidc_signer,
         )
 
     return AureyServiceState(
@@ -76,6 +129,10 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
         runtime=runtime,
         checkpointer=make_memory_checkpointer(),
         default_model=default_model,
+        cloud_db_engine=cloud_db_engine,
+        db_session_factory=db_session_factory,
+        onboarding=onboarding,
+        oidc_signer=oidc_signer,
     )
 
 

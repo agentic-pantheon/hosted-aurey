@@ -70,6 +70,24 @@ def create_fastapi_application(
 
     app = FastAPI(title="Aurey", lifespan=lifespan)
 
+    @app.get("/.well-known/jwks.json")
+    def well_known_jwks(request: Request) -> dict[str, object]:
+        from fastapi import HTTPException
+
+        svc = get_aurey_service_state(request)
+        if svc is None or svc.oidc_signer is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        return svc.oidc_signer.jwks_document()
+
+    @app.get("/.well-known/openid-configuration")
+    def well_known_openid_configuration(request: Request) -> dict[str, object]:
+        from fastapi import HTTPException
+
+        svc = get_aurey_service_state(request)
+        if svc is None or svc.oidc_signer is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        return svc.oidc_signer.openid_configuration()
+
     @app.get("/health")
     def health(request: Request) -> dict[str, bool]:
         return {"ok": get_aurey_service_state(request) is not None}

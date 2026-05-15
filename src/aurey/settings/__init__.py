@@ -101,6 +101,32 @@ class AureySettings(BaseSettings):
             "Unset means no platform key is resolved at runtime."
         ),
     )
+    oidc_issuer: str = Field(
+        default="",
+        description=(
+            "HTTPS issuer URL registered on the 1Claw platform app (no trailing slash). "
+            "Used as JWT ``iss`` and to publish ``/.well-known/jwks.json``."
+        ),
+    )
+    subject_token_audience: str = Field(
+        default="",
+        description=(
+            "JWT ``aud`` for minted ``subject_token`` values. When empty, ``plt_app_id`` is used."
+        ),
+    )
+    subject_token_ttl_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=3600,
+        description="Lifetime (seconds) for minted subject tokens sent to ``users/upsert``.",
+    )
+    oidc_rsa_private_key_pem_secret_source: str | None = Field(
+        default=None,
+        description=(
+            "Name of an environment variable holding an RSA private key PEM used to sign "
+            "``subject_token`` JWTs (RS256). Unset disables OIDC minting / JWKS wiring."
+        ),
+    )
 
     # --- Operator runtime (vault agent / SecretStore client) -----------------------
     ocv_oneclaw_base_url: str = Field(
@@ -213,6 +239,14 @@ class AureySettings(BaseSettings):
         stripped = v.strip()
         return stripped or None
 
+    @field_validator("oidc_rsa_private_key_pem_secret_source")
+    @classmethod
+    def _oidc_rsa_private_key_pem_secret_source_optional(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped or None
+
     @field_validator("ocv_agent_api_key_secret_source")
     @classmethod
     def _ocv_agent_api_key_secret_source_nonempty(cls, v: str) -> str:
@@ -245,3 +279,29 @@ class AureySettings(BaseSettings):
         if name is None:
             return None
         return _read_trimmed_nonempty_env(name)
+
+    def resolve_oidc_rsa_private_key_pem_optional(self) -> str | None:
+        """Load RSA PEM from ``oidc_rsa_private_key_pem_secret_source`` when configured."""
+
+        name = self.oidc_rsa_private_key_pem_secret_source
+        if name is None:
+            return None
+        return _read_trimmed_nonempty_env(name)
+
+    def cloud_onboarding_configured(self) -> bool:
+        """True when Telegram ``/start`` onboarding + JWKS plumbing should activate."""
+
+        if not (self.database_url or "").strip():
+            return False
+        if self.resolve_plt_app_api_key_optional() is None:
+            return False
+        if not (self.plt_app_id or "").strip():
+            return False
+        if not (self.plt_template_id or "").strip():
+            return False
+        if not (self.oidc_issuer or "").strip():
+            return False
+        if self.resolve_oidc_rsa_private_key_pem_optional() is None:
+            return False
+        audience = (self.subject_token_audience or "").strip() or (self.plt_app_id or "").strip()
+        return bool(audience)

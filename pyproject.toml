@@ -14,12 +14,15 @@ dependencies = [
     "langgraph",
     "deepagents>=0.5.8",
     "pydantic-settings",
+    "PyJWT[crypto]>=2.10.0",
     "rich>=13.7",
+    "sqlalchemy>=2.0,<3",
     "web3>=6.11.0",
 ]
 
 [project.optional-dependencies]
 api = [
+    "alembic>=1.13.0",
     "fastapi",
     "uvicorn[standard]",
     "langgraph-checkpoint-postgres>=3.1.0",
@@ -31,6 +34,7 @@ telegram = [
 
 [dependency-groups]
 dev = [
+    "alembic>=1.13.0",
     "fastapi>=0.115",
     "langgraph-checkpoint-postgres>=3.1.0",
     "pytest>=8",

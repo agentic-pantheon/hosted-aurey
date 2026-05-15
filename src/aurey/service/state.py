@@ -27,12 +27,20 @@ class AureyServiceState:
     _lock: Lock = field(default_factory=Lock)
     _postgres: ManagedPostgresCheckpointer | None = field(default=None, repr=False)
 
+    cloud_db_engine: Any | None = field(default=None, repr=False)
+    db_session_factory: Any | None = field(default=None, repr=False)
+    onboarding: Any | None = field(default=None, repr=False)
+    oidc_signer: Any | None = field(default=None, repr=False)
+
     def close_checkpointer(self) -> None:
         """Release Postgres pool/connection manager if this process opened one."""
 
         if self._postgres is not None:
             self._postgres.close()
             self._postgres = None
+        if self.cloud_db_engine is not None:
+            self.cloud_db_engine.dispose()
+            self.cloud_db_engine = None
 
     def get_or_create_graph(self, model: str | None) -> CompiledStateGraph[Any, Any, Any]:
         """Return a compiled deep agent keyed by resolved model identity (bounded cache).

@@ -20,6 +20,7 @@ from aurey.telegram import (
     format_telegram_message,
     handle_telegram_text,
     resolve_telegram_bot_token,
+    resolve_telegram_start_reply,
     telegram_message_chunks,
 )
 from aurey.telegram.client import TelegramInvokeProgressCallback, _telegram_chat_is_allowed
@@ -247,6 +248,17 @@ def test_resolve_telegram_bot_token_uses_secret_store() -> None:
     )
 
     assert resolve_telegram_bot_token(state) == FAKE_TELEGRAM_BOT_TOKEN
+
+
+def test_resolve_telegram_start_reply_without_onboarding_matches_legacy_start_copy() -> None:
+    state = _service_state_with_token(
+        token_path="aurey/telegram/bot_token",
+        token=FAKE_TELEGRAM_BOT_TOKEN,
+    )
+
+    reply = resolve_telegram_start_reply(state, telegram_user_id=1)
+
+    assert reply == "Aurey is ready. Send a message to invoke the agent."
 
 
 def test_resolve_telegram_bot_token_missing_path_is_sanitized() -> None:

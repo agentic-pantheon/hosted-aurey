@@ -245,6 +245,23 @@ def resolve_telegram_bot_token(state: AureyServiceState) -> str:
         ) from exc
 
 
+def resolve_telegram_start_reply(
+    state: AureyServiceState,
+    *,
+    telegram_user_id: int,
+    display_name: str | None = None,
+) -> str:
+    """Return the ``/start`` reply text when cloud onboarding might bypass the agent."""
+
+    if state.onboarding is None:
+        return "Aurey is ready. Send a message to invoke the agent."
+    outcome = state.onboarding.run_telegram_start(
+        telegram_user_id=int(telegram_user_id),
+        display_name=display_name,
+    )
+    return outcome.message
+
+
 def _telegram_status_progress_html(label: str) -> str:
     line = label.strip() or "…"
     return f"<i>{html.escape(line)}</i>"
@@ -361,10 +378,27 @@ def build_telegram_application(
         if not _telegram_chat_is_allowed(cid_opt, allowed_chats):
             gate_log.debug("Telegram /start ignored (disallowed chat_id=%r)", chat_id_raw)
             return
-        if update.effective_message is not None:
-            await update.effective_message.reply_text(
-                "Aurey is ready. Send a message to invoke the agent."
-            )
+        if update.effective_message is None:
+            return
+        user = update.effective_user
+        if user is None:
+            await update.effective_message.reply_text("Could not resolve the Telegram user.")
+            return
+
+        parts: list[str] = []
+        if getattr(user, "username", None):
+            parts.append("@" + str(user.username))
+        full_name = getattr(user, "full_name", None)
+        if full_name:
+            parts.append(str(full_name))
+        display_name = " ".join(parts).strip() or None
+
+        body = resolve_telegram_start_reply(
+            state,
+            telegram_user_id=int(user.id),
+            display_name=display_name,
+        )
+        await update.effective_message.reply_text(body)
 
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         msg = update.effective_message
@@ -547,5 +581,6 @@ __all__ = [
     "format_telegram_message",
     "handle_telegram_text",
     "resolve_telegram_bot_token",
+    "resolve_telegram_start_reply",
     "telegram_message_chunks",
 ]

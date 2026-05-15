@@ -14,6 +14,10 @@ def test_settings_defaults():
     assert s.plt_app_id == ""
     assert s.plt_template_id == ""
     assert s.plt_app_api_key_secret_source is None
+    assert s.oidc_issuer == ""
+    assert s.subject_token_audience == ""
+    assert s.subject_token_ttl_seconds == 300
+    assert s.oidc_rsa_private_key_pem_secret_source is None
     assert s.ocv_oneclaw_base_url == "https://api.1claw.xyz"
     assert s.ocv_vault_id == ""
     assert s.ocv_agent_api_key_secret_source == "AUREY_OCV_AGENT_API_KEY"
@@ -162,6 +166,27 @@ def test_settings_telegram_allowed_chat_ids_invalid(monkeypatch) -> None:
     monkeypatch.delenv("AUREY_TELEGRAM_ALLOWED_CHAT_IDS", raising=False)
     with pytest.raises(ValidationError):
         AureySettings(telegram_allowed_chat_ids="1,bogus")
+
+
+def test_cloud_onboarding_configured_requires_database_url(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("AUREY_DATABASE_URL", raising=False)
+    monkeypatch.setenv("AUREY_PLT_KEY", "plt")
+    s = AureySettings(
+        plt_app_id="app",
+        plt_template_id="tpl",
+        plt_app_api_key_secret_source="AUREY_PLT_KEY",
+        oidc_issuer="https://issuer.example",
+        oidc_rsa_private_key_pem_secret_source="PEMVAR",
+    )
+    monkeypatch.setenv("PEMVAR", "not-a-valid-pem-for-this-test")
+    assert s.cloud_onboarding_configured() is False
+
+
+def test_resolve_oidc_rsa_private_key_optional(monkeypatch) -> None:
+    monkeypatch.setenv("PEMVAR", "  -----BEGIN RSA-----  \n")
+    s = AureySettings(oidc_rsa_private_key_pem_secret_source="PEMVAR")
+    assert s.resolve_oidc_rsa_private_key_pem_optional() == "-----BEGIN RSA-----"
 
 
 def test_settings_telegram_allowed_chat_ids_env(monkeypatch) -> None:

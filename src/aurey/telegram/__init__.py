@@ -7,6 +7,7 @@ from aurey.telegram.client import (
     format_telegram_message,
     handle_telegram_text,
     resolve_telegram_bot_token,
+    resolve_telegram_start_reply,
     telegram_message_chunks,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "format_telegram_message",
     "handle_telegram_text",
     "resolve_telegram_bot_token",
+    "resolve_telegram_start_reply",
     "telegram_message_chunks",
 ]
