@@ -38,21 +38,21 @@ class _DummyChat(BaseChatModel):
 
 
 def test_bootstrap_raises_without_vault_id(monkeypatch):
-    monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "k")
-    s = AureySettings(oneclaw_vault_id="")
+    monkeypatch.setenv("AUREY_OCV_AGENT_API_KEY", "k")
+    s = AureySettings(ocv_vault_id="")
     with pytest.raises(AureyServiceBootstrapError, match="vault id"):
         bootstrap_aurey_service_state(s)
 
 
 def test_bootstrap_raises_on_missing_bootstrap_env(monkeypatch):
-    monkeypatch.delenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", raising=False)
-    s = AureySettings(oneclaw_vault_id="v1")
-    with pytest.raises(AureyServiceBootstrapError, match="Bootstrap 1Claw API key"):
+    monkeypatch.delenv("AUREY_OCV_AGENT_API_KEY", raising=False)
+    s = AureySettings(ocv_vault_id="v1")
+    with pytest.raises(AureyServiceBootstrapError, match="Operator 1Claw agent API key"):
         bootstrap_aurey_service_state(s)
 
 
 def test_bootstrap_oneclaw_evm_signer_is_same_as_secret_store_client(monkeypatch):
-    monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "k")
+    monkeypatch.setenv("AUREY_OCV_AGENT_API_KEY", "k")
     clients: list[OneClawHttpClient] = []
 
     def capture_client(*args: object, **kwargs: object) -> OneClawHttpClient:
@@ -61,14 +61,14 @@ def test_bootstrap_oneclaw_evm_signer_is_same_as_secret_store_client(monkeypatch
         return client
 
     monkeypatch.setattr("aurey.service.bootstrap.OneClawHttpClient", capture_client)
-    s = AureySettings(oneclaw_vault_id="v-bootstrap-signer")
+    s = AureySettings(ocv_vault_id="v-bootstrap-signer")
     state = bootstrap_aurey_service_state(s)
     assert len(clients) == 1
     assert state.runtime.oneclaw_evm_signer is clients[0]
 
 
 def test_bootstrap_uses_postgres_when_database_url(monkeypatch):
-    monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "k")
+    monkeypatch.setenv("AUREY_OCV_AGENT_API_KEY", "k")
     opened: list[str] = []
 
     def fake_open(url: str) -> ManagedPostgresCheckpointer:
@@ -79,7 +79,7 @@ def test_bootstrap_uses_postgres_when_database_url(monkeypatch):
         return ManagedPostgresCheckpointer(saver=saver, _cm=cm)
 
     monkeypatch.setattr("aurey.service.bootstrap.open_postgres_checkpointer", fake_open)
-    s = AureySettings(oneclaw_vault_id="v-pg", database_url="postgres://stub")
+    s = AureySettings(ocv_vault_id="v-pg", database_url="postgres://stub")
     state = bootstrap_aurey_service_state(s)
     cm = state._postgres._cm
     assert opened == ["postgres://stub"]
@@ -91,13 +91,13 @@ def test_bootstrap_uses_postgres_when_database_url(monkeypatch):
 
 
 def test_bootstrap_postgres_failure_wrapped(monkeypatch):
-    monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "k")
+    monkeypatch.setenv("AUREY_OCV_AGENT_API_KEY", "k")
 
     def boom(url: str) -> ManagedPostgresCheckpointer:
         raise OSError("connection refused")
 
     monkeypatch.setattr("aurey.service.bootstrap.open_postgres_checkpointer", boom)
-    s = AureySettings(oneclaw_vault_id="v-pg", database_url="postgres://stub")
+    s = AureySettings(ocv_vault_id="v-pg", database_url="postgres://stub")
     with pytest.raises(AureyServiceBootstrapError, match="PostgreSQL checkpointer"):
         bootstrap_aurey_service_state(s)
 
@@ -121,7 +121,7 @@ def test_construct_service_state_get_graph_invoke_smoke(monkeypatch):
         alchemy_api_secret_path=alchemy_path,
         wallet_signing_key_secret_path=signing_path,
         deep_agent_default_model="stub-spec",
-        oneclaw_vault_id="ignored-for-fake-runtime",
+        ocv_vault_id="ignored-for-fake-runtime",
     )
     runtime = AureyRuntime(
         settings=settings,

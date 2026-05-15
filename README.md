@@ -65,7 +65,7 @@ uv sync --group dev --extra telegram # optional Telegram bot deps
 cp .env.example .env
 ```
 
-Set at least `**AUREY_ONECLAW_VAULT_ID**`, `**AUREY_ONECLAW_BOOTSTRAP_API_KEY**` (the bootstrap key’s value goes in env; vault entries stay path-based), and your model provider (`**OPENAI_API_KEY**` when using defaults like `openai:gpt-4o-mini`). See `[.env.example](.env.example)` for vault paths (**Alchemy**, **LiFi**, **signing key**, **Telegram**, etc.). **Do not inline production secrets.**
+Set at least `**AUREY_OCV_VAULT_ID**`, `**AUREY_OCV_AGENT_API_KEY**` (the operator agent key’s **value** lives in env; vault entries remain path-only), optional **`AUREY_PLT_*`** identifiers for hosted provisioning (see the runbook), and your model provider (`**OPENAI_API_KEY**` when using defaults like `openai:gpt-4o-mini`). See `[.env.example](.env.example)` and `[docs/runbooks/1claw-cloud-setup.md](docs/runbooks/1claw-cloud-setup.md)`. **Do not inline production secrets.**
 
 ### 3 · Run the HTTP API locally
 
@@ -91,11 +91,12 @@ Smoke `**GET /health**`, then call `**POST /v1/invoke**` with JSON: `message`, `
   | `aurey/wallet/signing_key`      | `AUREY_WALLET_SIGNING_KEY_SECRET_PATH` | **Your wallet private key** *(required when `AUREY_EVM_SIGNING_MODE=vault_key`, the default)* |
   | `aurey/telegram/bot_token`      | `AUREY_TELEGRAM_BOT_TOKEN_SECRET_PATH` | **Telegram bot token** *(Telegram bot token from telegram botfather)*                                |
 
-   Paths like `aurey/...` are **examples** — any stable vault path works as long as `**AUREY_*_SECRET_PATH` matches what you configured in the 1Claw UI** and you never put the secret values in Aurey’s env (only the path strings + vault id + bootstrap key).
-3. **Create an agent** — Register a **hosted agent** (or equivalent) tied to that vault so the bootstrap API key can resolve secrets and (when configured) sign transactions via 1Claw’s flows.
+   Paths like `aurey/...` are **examples** — any stable vault path works as long as `**AUREY_*_SECRET_PATH` matches what you configured in the 1Claw UI** and you never put the secret values in Aurey’s env (only the path strings + `**AUREY_OCV_*` operator ids + **`AUREY_OCV_AGENT_API_KEY`** — see [.env.example](.env.example)).
+3. **Create an agent** — Register a **hosted agent** (or equivalent) tied to that vault so the operator agent API key can resolve secrets and (when configured) sign transactions via 1Claw’s flows.
 4. **Wire secrets in the UI** — Paste each real secret value at the path you picked in step 2. Double-check that `**AUREY_ALCHEMY_API_SECRET_PATH`**, `**AUREY_WALLET_SIGNING_KEY_SECRET_PATH**` (if using `vault_key` signing), `**AUREY_LIFI_API_SECRET_PATH**`, and `**AUREY_TELEGRAM_BOT_TOKEN_SECRET_PATH**` in `.env` / Railway **exactly match** those vault paths (not the secrets themselves).
-5. **Copy IDs for Railway** — Note the **vault ID** for `AUREY_ONECLAW_VAULT_ID` and create or copy the **bootstrap / agent API key** into `AUREY_ONECLAW_BOOTSTRAP_API_KEY` (never commit it; set it only in Railway).
-6. then, click here to [Deploy on Railway](https://railway.com/deploy/10EU4s?referralCode=WNfHEr&utm_medium=integration&utm_source=template&utm_campaign=generic). add the needed variables in the template.
+5. **Copy IDs for Railway** — Use **vault id** → `AUREY_OCV_VAULT_ID`, **agent id** (if using hosted token exchange) → `AUREY_OCV_AGENT_ID`, and the **operator agent API key** value → `AUREY_OCV_AGENT_API_KEY` (never commit it; set it only in Railway). Platform app/template ids (`AUREY_PLT_APP_ID`, `AUREY_PLT_TEMPLATE_ID`, optional `AUREY_PLT_APP_API_KEY*`) are for hosted provisioning—see the runbook.
+6. **Optional** — Run `./scripts/1claw-console-setup.placeholder.sh` as a reminder hook; it only prints the checklist path until automation lands.
+7. Then click here to [Deploy on Railway](https://railway.com/deploy/10EU4s?referralCode=WNfHEr&utm_medium=integration&utm_source=template&utm_campaign=generic). Add the needed variables in the template.
 
 
 
@@ -134,7 +135,7 @@ flowchart LR
 
 | Area         | Role                                                                                          |
 | ------------ | --------------------------------------------------------------------------------------------- |
-| `settings/`  | Pydantic settings — **vault path references**, bootstrap API key env **name**, model defaults |
+| `settings/`  | Pydantic settings — **platform (`plt_`) vs operator (`ocv_`)** 1Claw envs, vault path references, model defaults |
 | `custody/`   | `SecretStore`, `SecretValue`, `OneClawHttpClient`, fakes for tests                            |
 | `reasoning/` | Deep agent harness, factory                                                                   |
 | `tools/`     | LangChain tool surfaces                                                                       |

@@ -138,8 +138,8 @@ def test_invoke_logs_turn_lines(monkeypatch, caplog):
 
 
 def test_invoke_misconfigured_returns_stable_error(monkeypatch):
-    monkeypatch.delenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", raising=False)
-    s = AureySettings(oneclaw_vault_id="")
+    monkeypatch.delenv("AUREY_OCV_AGENT_API_KEY", raising=False)
+    s = AureySettings(ocv_vault_id="")
     with TestClient(create_fastapi_application(settings=s)) as client:
         r = client.post(
             "/v1/invoke",

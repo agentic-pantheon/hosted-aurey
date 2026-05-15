@@ -1167,7 +1167,7 @@ def test_tx_prepare_vault_key_rejects_whitespace_only_signing_path():
 def test_tx_prepare_oneclaw_intents_requires_agent_id():
     settings = AureySettings(
         evm_signing_mode="oneclaw_intents",
-        oneclaw_agent_id=None,
+        ocv_agent_id=None,
         wallet_signing_key_secret_path=None,
     )
     runtime = _runtime(secrets={}, settings=settings, http=ScriptedHttpClient(), rpc_map={})
@@ -1183,13 +1183,13 @@ def test_tx_prepare_oneclaw_intents_requires_agent_id():
         }
     )
     assert out["error"]["code"] == "secret_not_configured"
-    assert "oneclaw_agent_id" in out["error"]["message"]
+    assert "ocv_agent_id" in out["error"]["message"]
 
 
 def test_tx_prepare_oneclaw_intents_native_envelope():
     settings = AureySettings(
         evm_signing_mode="oneclaw_intents",
-        oneclaw_agent_id="agent-123",
+        ocv_agent_id="agent-123",
         wallet_signing_key_secret_path="wallets/hot-wallet",
     )
     runtime = _runtime(secrets={}, settings=settings, http=ScriptedHttpClient(), rpc_map={})
@@ -1213,7 +1213,7 @@ def test_tx_prepare_oneclaw_intents_native_envelope():
 def test_tx_prepare_lifi_oneclaw_intents_envelope():
     settings = AureySettings(
         evm_signing_mode="oneclaw_intents",
-        oneclaw_agent_id="agent-xyz",
+        ocv_agent_id="agent-xyz",
         wallet_signing_key_secret_path=None,
     )
     runtime = _runtime(secrets={}, settings=settings, http=ScriptedHttpClient(), rpc_map={})
@@ -1409,7 +1409,7 @@ def test_tx_execute_secret_unavailable_surfaces_store_detail():
 def test_tx_prepare_and_execute_oneclaw_intents_roundtrip():
     settings = AureySettings(
         evm_signing_mode="oneclaw_intents",
-        oneclaw_agent_id="agent-oc-1",
+        ocv_agent_id="agent-oc-1",
         wallet_signing_key_secret_path=None,
     )
     signer = FakeOneClawClient()
@@ -1444,7 +1444,7 @@ def test_tx_prepare_and_execute_oneclaw_intents_roundtrip():
 def test_tx_execute_oneclaw_requires_agent_id():
     settings = AureySettings(
         evm_signing_mode="oneclaw_intents",
-        oneclaw_agent_id=None,
+        ocv_agent_id=None,
         wallet_signing_key_secret_path=None,
     )
     signer = FakeOneClawClient()
@@ -1468,13 +1468,13 @@ def test_tx_execute_oneclaw_requires_agent_id():
     out = build_tx_execute_graph(runtime).invoke({"input": {"envelope": envelope}})
     assert out.get("result") is None
     assert out["error"]["code"] == "secret_not_configured"
-    assert "oneclaw_agent_id" in out["error"]["message"]
+    assert "ocv_agent_id" in out["error"]["message"]
 
 
 def test_tx_execute_oneclaw_requires_runtime_signer():
     settings = AureySettings(
         evm_signing_mode="oneclaw_intents",
-        oneclaw_agent_id="agent-x",
+        ocv_agent_id="agent-x",
         wallet_signing_key_secret_path=None,
     )
     runtime = _runtime(
@@ -1533,7 +1533,7 @@ def test_tx_execute_rejects_vault_envelope_when_operator_uses_oneclaw_intents():
     secrets = {signing_path: "0x" + "ff" * 32}
     settings = AureySettings(
         evm_signing_mode="oneclaw_intents",
-        oneclaw_agent_id="ag-99",
+        ocv_agent_id="ag-99",
         wallet_signing_key_secret_path=signing_path,
     )
     signer = FakeOneClawClient()

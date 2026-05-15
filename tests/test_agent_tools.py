@@ -490,7 +490,7 @@ def test_tx_execute_tool_rejects_idempotency_key_without_envelope():
 def test_tx_execute_tool_oneclaw_intents_requires_runtime_signer():
     settings = AureySettings(
         evm_signing_mode="oneclaw_intents",
-        oneclaw_agent_id="agent-tool",
+        ocv_agent_id="agent-tool",
         wallet_signing_key_secret_path=None,
     )
     runtime = AureyRuntime(
@@ -588,10 +588,10 @@ def test_wallet_context_for_deep_agent_prompt_invalid(caplog):
 
 def test_runtime_wiring_context_for_deep_agent_prompt_no_identifiers_or_paths():
     s = AureySettings(
-        oneclaw_base_url="https://api.example.test",
-        oneclaw_vault_id="vault-xyz-do-not-show",
-        oneclaw_agent_id="agent-value-must-not-appear-in-prompt",
-        oneclaw_api_key_secret_source="MY_BOOT_ENV_DO_NOT_SHOW",
+        ocv_oneclaw_base_url="https://api.example.test",
+        ocv_vault_id="vault-xyz-do-not-show",
+        ocv_agent_id="agent-value-must-not-appear-in-prompt",
+        ocv_agent_api_key_secret_source="MY_BOOT_ENV_DO_NOT_SHOW",
         alchemy_api_secret_path="vault/alchemy/leak-sensitive",
         lifi_api_secret_path=None,
         evm_signing_mode="vault_key",

@@ -121,12 +121,12 @@ def _execute_node(runtime: AureyRuntime, state: TxExecuteGraphState) -> TxExecut
 
         return {"result": outcome.model_dump()}
 
-    agent_id = runtime.settings.oneclaw_agent_id
+    agent_id = runtime.settings.ocv_agent_id
     if agent_id is None or not str(agent_id).strip():
         return {
             "error": GraphErrorBody(
                 code="secret_not_configured",
-                message="oneclaw_agent_id must be configured for oneclaw_intents execution.",
+                message="ocv_agent_id must be configured for oneclaw_intents execution.",
                 details=None,
             ).model_dump()
         }

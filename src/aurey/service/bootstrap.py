@@ -22,27 +22,27 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
     """Wire 1Claw secret store, runtime, and a LangGraph checkpointer (Postgres or in-memory)."""
 
     s = settings or AureySettings()
-    vault_id = (s.oneclaw_vault_id or "").strip()
+    vault_id = (s.ocv_vault_id or "").strip()
     if not vault_id:
-        raise AureyServiceBootstrapError("1Claw vault id is not configured.")
+        raise AureyServiceBootstrapError("Operator 1Claw vault id is not configured.")
 
     try:
-        api_key = s.resolve_oneclaw_bootstrap_api_key()
+        api_key = s.resolve_ocv_agent_api_key()
     except KeyError:
         raise AureyServiceBootstrapError(
-            "Bootstrap 1Claw API key is unavailable (bootstrap env var unset)."
+            "Operator 1Claw agent API key is unavailable (referenced env var unset)."
         ) from None
     except ValueError:
         raise AureyServiceBootstrapError(
-            "Bootstrap 1Claw API key configuration is invalid."
+            "Operator 1Claw agent API key configuration is invalid."
         ) from None
 
     client = OneClawHttpClient(
-        base_url=s.oneclaw_base_url.strip(),
+        base_url=s.ocv_oneclaw_base_url.strip(),
         api_key=api_key,
-        agent_token_expiry_skew_seconds=s.oneclaw_agent_token_expiry_skew_seconds,
+        agent_token_expiry_skew_seconds=s.ocv_agent_token_expiry_skew_seconds,
     )
-    store = OneClawSecretStore(client=client, vault_id=vault_id, agent_id=s.oneclaw_agent_id)
+    store = OneClawSecretStore(client=client, vault_id=vault_id, agent_id=s.ocv_agent_id)
 
     runtime = AureyRuntime(
         settings=s,

@@ -2,6 +2,10 @@
 
 Note: Configuration lives in this package intentionally; do not add a sibling
 ``aurey/settings.py`` module, which would conflict with this package name.
+
+Cloud-first layout distinguishes **platform** (``plt_``*, hosted Aurey operator /
+1Claw app registration) from **operator runtime** (``ocv_*``, per-tenant vault
+agent credentials used by the SecretStore HTTP client).
 """
 
 from __future__ import annotations
@@ -43,12 +47,32 @@ def parse_telegram_allowed_chat_ids(raw: str | None) -> frozenset[int] | None:
     return frozenset(ids) if ids else None
 
 
+_DEFAULT_ONECLAW_BASE = "https://api.1claw.xyz"
+
+
+def _read_trimmed_nonempty_env(var_name: str) -> str:
+    name = var_name.strip()
+    if not name:
+        raise ValueError("Environment variable name must not be empty.")
+    raw = os.environ.get(name)
+    if raw is None:
+        raise KeyError(name)
+    value = raw.strip()
+    if not value:
+        raise ValueError(f"Environment variable {name!r} is set but empty.")
+    return value
+
+
 class AureySettings(BaseSettings):
     """Loaded from environment variables with prefix ``AUREY_``.
 
-    Secret *paths* refer to vault paths resolved at runtime via a ``SecretStore``;
-    the bootstrap API key is read once from whichever env variable name you set in
-    ``oneclaw_api_key_secret_source`` (another env variable's **name**, not its value).
+    Operator API material uses ``ocv_*``: the agent API key is read once from the
+    env variable **named** by ``ocv_agent_api_key_secret_source`` (typically
+    ``AUREY_OCV_AGENT_API_KEY`` — the variable holds the secret value).
+
+    Platform/console fields (``plt_*``) are for hosted provisioning flows (e.g.
+    app registration, templates); runtime bootstrap does not require them unless
+    you wire those code paths.
     """
 
     model_config = SettingsConfigDict(
@@ -57,23 +81,45 @@ class AureySettings(BaseSettings):
         populate_by_name=True,
     )
 
-    oneclaw_base_url: str = Field(
-        default="https://api.1claw.xyz",
-        description="1Claw API base URL (no trailing slash required).",
+    # --- Platform (hosted product / 1Claw console) ---------------------------------
+    plt_oneclaw_base_url: str = Field(
+        default=_DEFAULT_ONECLAW_BASE,
+        description="1Claw API base URL for platform-scoped HTTP calls (no trailing slash).",
     )
-    oneclaw_vault_id: str = Field(
+    plt_app_id: str = Field(
         default="",
-        description="Vault identifier for secret reads.",
+        description="1Claw platform / app identifier (registration in console).",
     )
-    oneclaw_api_key_secret_source: str = Field(
-        default="AUREY_ONECLAW_BOOTSTRAP_API_KEY",
-        description="Name of the environment variable that holds the bootstrap 1Claw API key.",
+    plt_template_id: str = Field(
+        default="",
+        description="Aurey / 1Claw template identifier for onboarding or provisioning.",
     )
-    oneclaw_agent_id: str | None = Field(
+    plt_app_api_key_secret_source: str | None = Field(
         default=None,
-        description="Optional agent id for hosted token exchange flow.",
+        description=(
+            "Name of an environment variable holding the platform app API key. "
+            "Unset means no platform key is resolved at runtime."
+        ),
     )
-    oneclaw_agent_token_expiry_skew_seconds: float = Field(
+
+    # --- Operator runtime (vault agent / SecretStore client) -----------------------
+    ocv_oneclaw_base_url: str = Field(
+        default=_DEFAULT_ONECLAW_BASE,
+        description="1Claw API base URL for operator agent / vault traffic.",
+    )
+    ocv_vault_id: str = Field(
+        default="",
+        description="Operator vault identifier (``vlt_…``) for secret reads.",
+    )
+    ocv_agent_id: str | None = Field(
+        default=None,
+        description="Operator agent id for hosted token exchange (``agt_…``).",
+    )
+    ocv_agent_api_key_secret_source: str = Field(
+        default="AUREY_OCV_AGENT_API_KEY",
+        description="Name of the environment variable that holds the operator agent API key.",
+    )
+    ocv_agent_token_expiry_skew_seconds: float = Field(
         default=60.0,
         ge=0.0,
         description=(
@@ -159,6 +205,22 @@ class AureySettings(BaseSettings):
         parse_telegram_allowed_chat_ids(stripped)
         return stripped
 
+    @field_validator("plt_app_api_key_secret_source")
+    @classmethod
+    def _plt_app_api_key_secret_source_optional(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped or None
+
+    @field_validator("ocv_agent_api_key_secret_source")
+    @classmethod
+    def _ocv_agent_api_key_secret_source_nonempty(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("ocv_agent_api_key_secret_source must not be empty.")
+        return stripped
+
     @property
     def telegram_allowed_chat_id_allowlist(self) -> frozenset[int] | None:
         """Frozen set of allowed chat ids, or ``None`` when the bot accepts any chat."""
@@ -171,16 +233,15 @@ class AureySettings(BaseSettings):
 
         return self.evm_signing_mode == "vault_key"
 
-    def resolve_oneclaw_bootstrap_api_key(self) -> str:
-        """Return bootstrap API key from the env named by ``oneclaw_api_key_secret_source``."""
+    def resolve_ocv_agent_api_key(self) -> str:
+        """Return the operator agent API key from ``ocv_agent_api_key_secret_source``."""
 
-        name = self.oneclaw_api_key_secret_source.strip()
-        if not name:
-            raise ValueError("oneclaw_api_key_secret_source must not be empty.")
-        raw = os.environ.get(name)
-        if raw is None:
-            raise KeyError(name)
-        value = raw.strip()
-        if not value:
-            raise ValueError(f"Environment variable {name!r} is set but empty.")
-        return value
+        return _read_trimmed_nonempty_env(self.ocv_agent_api_key_secret_source)
+
+    def resolve_plt_app_api_key_optional(self) -> str | None:
+        """Resolve platform app API key when ``plt_app_api_key_secret_source`` is set."""
+
+        name = self.plt_app_api_key_secret_source
+        if name is None:
+            return None
+        return _read_trimmed_nonempty_env(name)

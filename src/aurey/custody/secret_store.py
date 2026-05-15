@@ -300,7 +300,7 @@ class OneClawHttpClient:
                 detail=(
                     f"Agent token exchange failed with HTTP {exc.code}. "
                     "This happens before any vault secret (e.g. Telegram path) is read. "
-                    "Check `oneclaw_agent_id`, bootstrap API key, and 1Claw availability."
+                    "Check `ocv_agent_id`, operator agent API key, and 1Claw availability."
                 ),
             ) from exc
         except (OSError, URLError, json.JSONDecodeError) as exc:

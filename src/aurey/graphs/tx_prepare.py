@@ -24,12 +24,12 @@ def _evm_prepare_signing_settings_error(runtime: AureyRuntime) -> dict[str, Any]
                 message="Wallet signing key secret path is not configured.",
             ).model_dump()
     if settings.evm_signing_mode == "oneclaw_intents":
-        agent_id = settings.oneclaw_agent_id
+        agent_id = settings.ocv_agent_id
         if agent_id is None or not str(agent_id).strip():
             return GraphErrorBody(
                 code="secret_not_configured",
                 message=(
-                    "oneclaw_agent_id must be configured when evm_signing_mode is oneclaw_intents."
+                    "ocv_agent_id must be configured when evm_signing_mode is oneclaw_intents."
                 ),
             ).model_dump()
     return None

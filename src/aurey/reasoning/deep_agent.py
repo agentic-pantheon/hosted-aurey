@@ -125,14 +125,14 @@ def runtime_wiring_context_for_deep_agent_prompt(settings: AureySettings) -> str
     """
 
     default_oneclaw = "https://api.1claw.xyz"
-    base_custom = settings.oneclaw_base_url.strip() != default_oneclaw
+    base_custom = settings.ocv_oneclaw_base_url.strip() != default_oneclaw
     lines = [
         "Runtime wiring (capability hints only — vault IDs, vault paths, API hostnames, "
         "and credential env-var names stay server-side):",
         f"- 1Claw: {'reachable at a non-default base URL (not shown)' if base_custom else 'default hosted base URL'}; "
-        f"vault linkage: {'configured' if (settings.oneclaw_vault_id or '').strip() else 'unset'}",
+        f"vault linkage: {'configured' if (settings.ocv_vault_id or '').strip() else 'unset'}",
         "- 1Claw hosted-agent token flow: "
-        + ("configured" if (settings.oneclaw_agent_id or "").strip() else "not configured"),
+        + ("configured" if (settings.ocv_agent_id or "").strip() else "not configured"),
         f"- EVM signing mode: {settings.evm_signing_mode}",
         "- Alchemy-backed reads/RPC via vault secret: "
         + ("configured" if (settings.alchemy_api_secret_path or "").strip() else "not configured"),
