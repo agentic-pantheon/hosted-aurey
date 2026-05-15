@@ -120,6 +120,12 @@ class AureySettings(BaseSettings):
         le=3600,
         description="Lifetime (seconds) for minted subject tokens sent to ``users/upsert``.",
     )
+    claim_poll_interval_seconds: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=3600.0,
+        description="Background interval (seconds) for polling platform users awaiting wallet claim.",
+    )
     oidc_rsa_private_key_pem_secret_source: str | None = Field(
         default=None,
         description=(

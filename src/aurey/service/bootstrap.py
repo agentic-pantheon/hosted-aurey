@@ -65,6 +65,7 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
 
         from aurey.cloud.oidc import OidcSubjectTokenSigner
         from aurey.cloud.onboarding import OnboardingService
+        from aurey.cloud.onboarding.grant_repository import SqlGrantReferenceRepository
         from aurey.cloud.platform import OneClawPlatformApiClient
 
         db_url = (s.database_url or "").strip()
@@ -97,11 +98,13 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
             api_key=plt_key,
             http=platform_http,
         )
+        grants = SqlGrantReferenceRepository()
         onboarding = OnboardingService(
             settings=s,
             session_factory=db_session_factory,
             platform=platform,
             oidc=oidc_signer,
+            grant_repository=grants,
         )
 
     db_url = (s.database_url or "").strip()

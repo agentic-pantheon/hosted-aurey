@@ -46,14 +46,34 @@ def create_fastapi_application(
     Installing ``aurey[api]`` is required to import :mod:`fastapi`.
     """
 
+    import asyncio
+    import contextlib
+    import logging
     from contextlib import asynccontextmanager
 
     from fastapi import FastAPI
+    from starlette.responses import Response
 
     injected = state
+    _claim_poll_log = logging.getLogger("aurey.cloud.claim_poll")
+
+    async def _claim_poll_loop(svc: AureyServiceState) -> None:
+        onboarding = svc.onboarding
+        if onboarding is None:
+            return
+        interval = float(svc.settings.claim_poll_interval_seconds)
+        while True:
+            try:
+                await asyncio.to_thread(onboarding.poll_awaiting_claims)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _claim_poll_log.exception("Claim poll tick failed")
+            await asyncio.sleep(interval)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        poll_task: asyncio.Task[None] | None = None
         if injected is not None:
             app.state.aurey = injected
         else:
@@ -61,9 +81,16 @@ def create_fastapi_application(
                 app.state.aurey = bootstrap_aurey_service_state(settings)
             except AureyServiceBootstrapError:
                 app.state.aurey = None
+        svc = getattr(app.state, "aurey", None)
+        if svc is not None and svc.onboarding is not None:
+            poll_task = asyncio.create_task(_claim_poll_loop(svc))
         try:
             yield
         finally:
+            if poll_task is not None:
+                poll_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await poll_task
             st = getattr(app.state, "aurey", None)
             if st is not None:
                 st.close_checkpointer()
@@ -102,6 +129,17 @@ def create_fastapi_application(
             context=turn.context,
             model=turn.agent_model_spec,
         )
+
+    @app.post("/v1/cloud/onboarding/claim-events")
+    async def claim_events_webhook_stub(request: Request) -> Response:
+        """Optional webhook hook for claim completion (Phase C stub).
+
+        Future work: verify a platform signature, enqueue idempotent claim verification, and
+        reconcile with :meth:`~aurey.cloud.onboarding.OnboardingService.poll_awaiting_claims`.
+        """
+
+        _ = await request.body()
+        return Response(status_code=204)
 
     return app
 

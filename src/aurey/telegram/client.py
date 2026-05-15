@@ -319,6 +319,16 @@ def handle_telegram_text(
 ) -> str:
     """Handle one inbound Telegram text message and return safe text for ``reply_text``."""
 
+    if state.onboarding is not None and user_id is not None:
+        try:
+            tg_uid = int(user_id)
+        except (TypeError, ValueError):
+            tg_uid = None
+        if tg_uid is not None:
+            gate = state.onboarding.blocking_agent_message_for_telegram_user(tg_uid)
+            if gate:
+                return gate
+
     session_id = f"telegram:{chat_id}"
     context: dict[str, Any] = {"telegram_chat_id": str(chat_id)}
     if user_id is not None:

@@ -84,6 +84,7 @@ class _RecordingGraph:
 
 class _FakeServiceState:
     default_model = "stub-model"
+    onboarding = None
 
     def __init__(self, graph: _RecordingGraph) -> None:
         self.graph = graph
@@ -155,6 +156,27 @@ def test_handle_telegram_text_progress_sink_receives_invoke_events() -> None:
     assert captures == ["Thinking…", "Gathering details…"]
     cbs = _callbacks_from_invoke_config(graph.config)
     assert cbs and any(isinstance(c, TelegramInvokeProgressCallback) for c in cbs)
+
+
+def test_handle_telegram_text_blocked_while_awaiting_claim() -> None:
+    class _Gate:
+        def blocking_agent_message_for_telegram_user(self, telegram_user_id: int | None) -> str | None:
+            _ = telegram_user_id
+            return "Finish wallet setup first (test)."
+
+    graph = _RecordingGraph()
+    state = _FakeServiceState(graph)
+    state.onboarding = _Gate()
+
+    reply = handle_telegram_text(
+        state,  # type: ignore[arg-type]
+        chat_id=123,
+        user_id=456,
+        text="hello aurey",
+    )
+
+    assert reply == "Finish wallet setup first (test)."
+    assert graph.payload is None
 
 
 def test_handle_telegram_text_sanitizes_agent_errors() -> None:

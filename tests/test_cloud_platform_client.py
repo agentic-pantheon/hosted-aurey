@@ -40,6 +40,26 @@ def test_platform_client_upsert_and_bootstrap_urls() -> None:
     assert http.calls[0]["json_body"]["subject_token"] == "jwt-here"
 
 
+def test_platform_client_get_connection_uses_expected_path() -> None:
+    http = ScriptedHttpClient(
+        [
+            (
+                lambda method, url, headers, json_body: method == "GET"
+                and url.endswith("/v1/platform/connections/conn_z"),
+                {"status": "ready"},
+            ),
+        ]
+    )
+    client = OneClawPlatformApiClient(
+        base_url="https://api.1claw.xyz",
+        api_key="plt_test",
+        http=http,
+    )
+    body = client.get_connection(connection_id="conn_z")
+    assert body["status"] == "ready"
+    assert http.calls[0]["method"] == "GET"
+
+
 def test_platform_client_unwraps_data_envelope() -> None:
     http = ScriptedHttpClient(
         [

@@ -86,5 +86,22 @@ class OneClawPlatformApiClient:
             raise HttpJsonRequestError(status_code=500, body_text="platform_bootstrap_non_object")
         return _unwrap_response_payload(raw)
 
+    def get_connection(self, *, connection_id: str) -> dict[str, Any]:
+        """Fetch connection details for claim polling (Phase C).
+
+        **Assumption:** ``GET /v1/platform/connections/{connection_id}`` exists and returns a
+        JSON object eventually consumed by :func:`aurey.cloud.onboarding.claim_parser.parse_claim_ready_signal`.
+        """
+
+        cid = (connection_id or "").strip()
+        if not cid:
+            raise ValueError("connection_id must not be empty.")
+
+        url = f"{self._root}/v1/platform/connections/{cid}"
+        raw = self._http.request_json(method="GET", url=url, headers=self._auth_headers())
+        if not isinstance(raw, dict):
+            raise HttpJsonRequestError(status_code=500, body_text="platform_connection_non_object")
+        return _unwrap_response_payload(raw)
+
 
 __all__ = ["OneClawPlatformApiClient"]

@@ -184,6 +184,14 @@ def test_well_known_jwks_served_when_oidc_signer_present(monkeypatch):
     assert oidc.json()["issuer"] == "https://issuer.example"
 
 
+def test_claim_webhook_stub_noops_with_204(monkeypatch):
+    st = _service_state(monkeypatch)
+    with TestClient(create_fastapi_application(state=st)) as client:
+        r = client.post("/v1/cloud/onboarding/claim-events", content=b'{"ignored":true}')
+    assert r.status_code == 204
+    assert r.content == b""
+
+
 def test_invoke_agent_invoke_failure_is_generic(monkeypatch):
     st = _service_state(monkeypatch)
 

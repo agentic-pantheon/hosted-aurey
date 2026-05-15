@@ -37,6 +37,10 @@ class PlatformUser(Base):
     vault_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
     agent_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
 
+    # Delegated-grant reference only (vault path / logical locator). Never store raw tokens.
+    grant_ref_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    grant_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
     display_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(
