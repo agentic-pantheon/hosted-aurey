@@ -124,7 +124,10 @@ class AureySettings(BaseSettings):
         default=30.0,
         ge=5.0,
         le=3600.0,
-        description="Background interval (seconds) for polling platform users awaiting wallet claim.",
+        description=(
+            "Background interval (seconds) for polling platform users "
+            "awaiting wallet claim."
+        ),
     )
     oidc_rsa_private_key_pem_secret_source: str | None = Field(
         default=None,
@@ -163,8 +166,21 @@ class AureySettings(BaseSettings):
     oneclaw_delegated_token_scope: str = Field(
         default="intents:sign",
         description=(
-            "Scope string sent to ``POST /v1/auth/delegated-token`` when signing as a hosted "
-            "user agent (exact value defined by 1Claw for intents/unified sign)."
+            "Proposed scope string for ``POST /v1/auth/delegated-token`` when exchanging a hosted "
+            "user grant into a short-lived JWT for Intents / unified signing. As of upstream "
+            "Platform API docs, that route is described but **not yet wired** on 1Claw — treat "
+            "this value as provisional until the endpoint is live and 1Claw publishes the final "
+            "scope grammar."
+        ),
+    )
+    cloud_hosted_intents_signing_enabled: bool = Field(
+        default=False,
+        description=(
+            "Allow Telegram (and similar) invokes for ``ready`` platform users to use "
+            ":func:`aurey.principal_augment.augment_runtime_for_principal` when "
+            "``evm_signing_mode`` is ``oneclaw_intents``. Leave **False** by default — hosted "
+            "delegated signing needs a working delegated-token endpoint, operator ``ocv_`` HTTP, "
+            "and grant JWT material readable from ``grant_ref_path`` in the operator vault."
         ),
     )
 

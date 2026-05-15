@@ -352,12 +352,25 @@ def handle_telegram_text(
                 context["oneclaw_user_agent_id"] = principal.user_agent_id
                 hosted_wallet = principal.wallet_address
                 if state.settings.evm_signing_mode == "oneclaw_intents":
+                    if not state.settings.cloud_hosted_intents_signing_enabled:
+                        return (
+                            "On-chain actions for your linked wallet need hosted Intents signing, "
+                            "which is turned off for this server. The operator should set "
+                            "AUREY_CLOUD_HOSTED_INTENTS_SIGNING_ENABLED=true only after POST "
+                            "/v1/auth/delegated-token is available on 1Claw and grant JWTs are "
+                            "stored in the operator vault (see runbook). Until then, use "
+                            "AUREY_EVM_SIGNING_MODE=vault_key for the operator wallet, or finish "
+                            "wiring hosted signing."
+                        )
                     try:
                         overlay = augment_runtime_for_principal(state.runtime, principal)
-                    except RuntimeError:
-                        logging.getLogger("aurey.telegram").warning(
-                            "Hosted user turn could not build delegated signing runtime "
-                            "(check oneclaw_operator_http and delegated token scope).",
+                    except RuntimeError as exc:
+                        log = logging.getLogger("aurey.telegram")
+                        log.warning("Hosted user turn could not build signing runtime: %s", exc)
+                        return (
+                            "I cannot sign transactions for your linked account yet "
+                            f"(setup: {exc}). Ask the operator to check hosted grant paths and "
+                            "1Claw delegated-token availability."
                         )
 
     extras = [TelegramInvokeProgressCallback(progress_sink)] if progress_sink is not None else None

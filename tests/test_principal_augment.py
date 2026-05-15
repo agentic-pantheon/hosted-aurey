@@ -14,6 +14,25 @@ from tests.fakes.evm_rpc import rpc_factory_from_mapping
 from tests.fakes.http_client import ScriptedHttpClient
 
 
+def test_augment_requires_grant_secret_in_vault() -> None:
+    settings = AureySettings(
+        ocv_vault_id="v",
+        oneclaw_delegated_token_scope="intents:sign",
+        cloud_hosted_intents_signing_enabled=True,
+    )
+    rt = AureyRuntime(
+        settings=settings,
+        secret_store=FakeSecretStore({}),
+        evm_rpc_factory=rpc_factory_from_mapping({}),
+        http=ScriptedHttpClient(),
+        tx_pipeline=DeterministicTxPipeline(),
+        oneclaw_operator_http=ScriptedHttpClient([]),
+    )
+    principal = UserPrincipal(db_user_id="1", user_agent_id="a", grant_ref_path="missing/path")
+    with pytest.raises(RuntimeError, match="Hosted signing needs grant material"):
+        augment_runtime_for_principal(rt, principal)
+
+
 def test_augment_requires_operator_http() -> None:
     settings = AureySettings(ocv_vault_id="v", oneclaw_delegated_token_scope="s")
     rt = AureyRuntime(
