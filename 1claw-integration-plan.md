@@ -92,7 +92,7 @@ You already use this in `OneClawHttpClient._fetch_access_token` `src/aurey/custo
 
 Before you build, you'll want sign-off on these — the public docs don't pin them down:
 
-1. **Template can declare signing keys?** The example template shows `vault`, `agents`, `policies` but not `signing_keys`. Ask: *Can a template auto-provision per-chain signing keys at bootstrap time, or must each user click "Provision keys" during claim?* This drives whether `claim_url` UX is mandatory for new users or optional.
+1. **Template can declare signing keys?** Hosted Aurey aligns with **`spec.signing_keys`** (see `platform-api.md` and bootstrap `summary.signing_key_chains`). Still validate with 1Claw **which chains** your template id supports and whether any SKUs omit template-driven provisioning.
 2. **Delegated-token scopes for Intents.** The doc example uses `scope: "secrets:read paths:api-keys/*"`. Ask: *What's the scope string for* `POST /v1/agents/{id}/transactions` *(and* `/sign`*)?* Candidates: `intents:submit agents:{user_agent_id}`, or just `agents:{user_agent_id}:transactions`. Without this the JWT may come back but 403 on the actual call.
 3. **Grant lifetime + refresh.** Is `user_grant_jwt` a long-lived bearer the user signs once during claim and the operator stores? Or do you exchange it via `delegated-token` for short-lived JWTs each time (your code's caching pattern works fine for the latter)? Almost certainly the latter, but confirm: *what is the typical TTL and re-grant lifecycle?*
 4. **Silent mode + claim_url.** With `auth_mode: silent`, does `bootstrap` still always return a `claim_url`, and is visiting it *required* for the user to hold a usable client share / grant any access? For a Telegram-first product where the user never opens a desktop browser, this is the UX cliff.
@@ -157,8 +157,11 @@ Authorization: Bearer <your-1claw-user-token>
 
    → returns template_id
 
-   After bootstrap, each user must provision chain signing keys separately
-   (POST /v1/agents/{agent_id}/signing-keys); templates cannot declare signing_keys yet.
+   Optionally include **`signing_keys: { chains: [...] }`** in the template `spec` so chains
+   are provisioned as part of bootstrap / claim where the Platform API supports it; otherwise users
+   can add chains later via `POST /v1/agents/{agent_id}/signing-keys`.
+   Hosted Aurey persists `provisioned_signing_key_chains` from normalized `summary.signing_key_chains`
+   on `platform_users` when the bootstrap response includes them.
 3. Provision the operator's *own* agent (separate from the platform app) so you have
 
    an ocv_ key for delegated-token actor_token.

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from aurey.cloud.db.models import BootstrapAttempt, OnboardingEvent, OnboardingPhase, PlatformUser
 from aurey.cloud.oidc import OidcSubjectTokenSigner
-from aurey.cloud.onboarding.claim_parser import parse_claim_ready_signal
+from aurey.cloud.onboarding.claim_parser import parse_connected_user_claim_ready
 from aurey.cloud.onboarding.grant_repository import GrantReferenceRepository
 from aurey.cloud.onboarding.state_machine import (
     InvalidOnboardingTransition,
@@ -40,6 +40,17 @@ def _telegram_subject(telegram_user_id: int) -> str:
 
 def _bootstrap_idempotency_key(*, connection_id: str, template_id: str) -> str:
     return f"{template_id}:{connection_id}"
+
+
+def _signing_key_chains_from_bootstrap(boot: dict[str, Any]) -> list[str] | None:
+    raw = boot.get("signing_key_chains")
+    if not isinstance(raw, list) or not raw:
+        return None
+    out: list[str] = []
+    for x in raw:
+        if isinstance(x, str) and x.strip():
+            out.append(x.strip())
+    return out or None
 
 
 class OnboardingService:
@@ -196,6 +207,29 @@ class OnboardingService:
         transitioned = 0
         session = self._session_factory()
         try:
+            app_id = (self._settings.plt_app_id or "").strip()
+            by_connection: dict[str, dict[str, Any]] | None = None
+            users_list_failure_reason: str | None = None
+            if not app_id:
+                users_list_failure_reason = "missing_plt_app_id"
+            else:
+                try:
+                    member_rows = self._platform.list_app_connected_users(app_id=app_id)
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning(
+                        "Claim poll could not list platform users (%s)",
+                        type(exc).__name__,
+                    )
+                    users_list_failure_reason = "platform_users_list_unavailable"
+                    member_rows = None
+                else:
+                    by_connection = {}
+                    for rec in member_rows:
+                        if not isinstance(rec, dict):
+                            continue
+                        cc = str(rec.get("connection_id") or "").strip()
+                        if cc:
+                            by_connection[cc] = rec
             rows = session.scalars(
                 select(PlatformUser)
                 .where(PlatformUser.onboarding_state == OnboardingPhase.AWAITING_CLAIM.value)
@@ -213,26 +247,39 @@ class OnboardingService:
                     )
                     session.commit()
                     continue
-                try:
-                    payload = self._platform.get_connection(connection_id=cid)
-                except Exception as exc:  # noqa: BLE001
-                    _LOG.warning("Claim poll platform call failed (%s)", type(exc).__name__)
+
+                if users_list_failure_reason is not None:
                     self._append_event(
                         session,
                         user=user,
-                        event_type="claim_poll_http_failed",
-                        payload={"error_type": type(exc).__name__},
+                        event_type="claim_poll_users_list_failed",
+                        payload={"reason": users_list_failure_reason},
                     )
                     session.commit()
                     continue
 
-                parsed = parse_claim_ready_signal(payload)
+                if by_connection is None:
+                    _LOG.error("Claim poll: users index missing after successful list fetch")
+                    session.commit()
+                    continue
+                rec = by_connection.get(cid)
+                if rec is None:
+                    self._append_event(
+                        session,
+                        user=user,
+                        event_type="claim_poll_missing_user_row",
+                        payload={"connection_id": cid},
+                    )
+                    session.commit()
+                    continue
+
+                parsed = parse_connected_user_claim_ready(rec)
                 if not parsed.ready:
                     self._append_event(
                         session,
                         user=user,
                         event_type="claim_poll_not_ready",
-                        payload={"matched_keys": []},
+                        payload={"matched_keys": list(parsed.matched_keys)},
                     )
                     session.commit()
                     continue
@@ -250,7 +297,10 @@ class OnboardingService:
                     session,
                     user=user,
                     event_type="claim_detected",
-                    event_payload={"connection_id": cid, "signal_keys": list(parsed.matched_keys)},
+                    event_payload={
+                        "connection_id": cid,
+                        "signal_keys": list(parsed.matched_keys),
+                    },
                     grant_path=grant_path,
                     grant_metadata=meta,
                 ):
@@ -511,6 +561,9 @@ class OnboardingService:
         user_row.claim_url = claim_url
         user_row.vault_id = vault_id
         user_row.agent_id = agent_id
+        chains = _signing_key_chains_from_bootstrap(boot)
+        if chains is not None:
+            user_row.provisioned_signing_key_chains = chains
         try:
             self._apply_phase(
                 session,
@@ -521,6 +574,7 @@ class OnboardingService:
                     "connection_id": connection_id,
                     "vault_id": vault_id,
                     "agent_id": agent_id,
+                    "signing_key_chain_count": len(chains) if chains else 0,
                 },
             )
         except InvalidOnboardingTransition as exc:

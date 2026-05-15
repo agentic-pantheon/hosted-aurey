@@ -1,0 +1,334 @@
+---
+
+## title: Platform API
+description: Build multi-tenant products on 1Claw — provision users, bootstrap vaults/agents/policies from templates, and manage connected user infrastructure.
+sidebar_position: 14
+
+# Platform API
+
+The Platform API lets you build products on top of 1Claw. Register your app, create bootstrap templates, provision end-users, and manage their secrets infrastructure — all with custody guarantees that prevent your platform from accessing end-user secrets.
+
+:::info Requirements
+The Platform API requires a **Pro or higher** subscription. [Upgrade your plan →](/settings/billing)
+:::
+
+## Quickstart (~10 min)
+
+### 1. Register a Platform App
+
+```bash
+curl -X POST "https://api.1claw.xyz/v1/platform/apps" \
+  -H "Authorization: Bearer YOUR_USER_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My DeFi Platform",
+    "slug": "my-defi",
+    "description": "DeFi automation for end users",
+    "billing_model": "platform_pays",
+    "auth_mode": "silent"
+  }'
+```
+
+Save the returned `api_key` (prefixed `plt_`) — it won't be shown again. This key authenticates all subsequent Platform API calls.
+
+### 2. Create a Bootstrap Template
+
+Templates define what gets created for each user: a vault, agents, and access policies.
+
+```bash
+curl -X POST "https://api.1claw.xyz/v1/platform/apps/APP_ID/templates" \
+  -H "Authorization: Bearer plt_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "default-template",
+    "spec": {
+      "vault": {
+        "name": "user-vault",
+        "description": "Auto-provisioned vault"
+      },
+      "agents": [{
+        "name": "defi-bot",
+        "description": "Automated DeFi agent",
+        "intents": { "enabled": true },
+        "shroud_enabled": true,
+        "shroud_config": {
+          "pii_policy": "redact",
+          "enable_secret_redaction": true
+        }
+      }],
+      "policies": [{
+        "principal_ref": "agents.primary",
+        "vault_ref": "vault",
+        "paths": ["api-keys/*", "keys/*"],
+        "permissions": ["read", "write"],
+        "conditions": {}
+      }]
+    }
+  }'
+```
+
+### 3. Provision a User
+
+```bash
+curl -X POST "https://api.1claw.xyz/v1/platform/users/upsert" \
+  -H "Authorization: Bearer plt_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "external_subject": "telegram:123456789"
+  }'
+```
+
+### 4. Bootstrap the User
+
+```bash
+curl -X POST "https://api.1claw.xyz/v1/platform/connections/CONNECTION_ID/bootstrap" \
+  -H "Authorization: Bearer plt_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "template_id": "TEMPLATE_UUID"
+  }'
+```
+
+The response includes `claim_url`, `claim_token`, and `summary` (with `vault_id`, `agent_id`, `policy_ids`, and **`signing_key_chains`** when the template provisions signing keys).
+
+:::note OpenAPI vs live responses
+
+If your generated client lags behind production, **`summary.signing_key_chains`** might appear in responses before it is listed in the published schema. Hosted Aurey normalizes **`summary`** fields onto the bootstrap object for stable reads regardless.
+
+:::
+
+---
+
+## Template Spec Reference
+
+The `spec` field is a JSON object whose common top-level keys are `vault`, `agents`, `policies`, and `signing_keys`. All are optional — include only what you need.
+
+### `vault`
+
+Creates a single vault for the user.
+
+
+| Field         | Type   | Default  | Description       |
+| ------------- | ------ | -------- | ----------------- |
+| `name`        | string | `"main"` | Vault name        |
+| `description` | string | `""`     | Vault description |
+
+
+```json
+{
+  "vault": {
+    "name": "prod-secrets",
+    "description": "Production API keys and credentials"
+  }
+}
+```
+
+### `agents`
+
+Array of agent definitions. Each entry creates one agent with an auto-generated `ocv_` API key.
+
+
+| Field             | Type    | Default     | Description                                               |
+| ----------------- | ------- | ----------- | --------------------------------------------------------- |
+| `name`            | string  | `"primary"` | Agent name                                                |
+| `description`     | string  | `""`        | Agent description                                         |
+| `intents.enabled` | boolean | `false`     | Enable the Intents API (transaction signing)              |
+| `shroud_enabled`  | boolean | `false`     | Route LLM traffic through Shroud TEE                      |
+| `shroud_config`   | object  | `null`      | Per-agent Shroud policy (PII, injection thresholds, etc.) |
+
+
+```json
+{
+  "agents": [
+    {
+      "name": "trading-bot",
+      "description": "Executes DeFi trades",
+      "intents": { "enabled": true },
+      "shroud_enabled": true,
+      "shroud_config": {
+        "pii_policy": "redact",
+        "injection_threshold": 0.7,
+        "allowed_providers": ["openai", "anthropic"],
+        "enable_secret_redaction": true
+      }
+    }
+  ]
+}
+```
+
+:::caution intents vs intents_api_enabled
+In the template spec, use `"intents": { "enabled": true }` (nested object). This is different from the direct agent creation API which uses `"intents_api_enabled": true` (flat boolean). The bootstrap engine translates between the two formats.
+:::
+
+### `signing_keys`
+
+When present, declares which chains should receive signing keys **as part of the bootstrap / claim flow** (so users are not blocked on a separate provisioning step).
+
+
+| Field   | Type      | Description                                                                 |
+| ------- | --------- | ---------------------------------------------------------------------------- |
+| `chains` | `string[]` | Chain identifiers understood by the platform (e.g. `ethereum`, `solana`). |
+
+
+```json
+{
+  "signing_keys": {
+    "chains": ["ethereum", "solana"]
+  }
+}
+```
+
+Depending on rollout, `POST …/connections/{connection_id}/bootstrap` may echo resulting chain locators under `summary.signing_key_chains` (`string[]`).
+
+### `policies`
+
+Array of access policies linking agents to vault paths.
+
+
+| Field           | Type     | Default             | Description                                                           |
+| --------------- | -------- | ------------------- | --------------------------------------------------------------------- |
+| `principal_ref` | string   | first agent         | Reference to the agent. Use `"agents.primary"` for the first agent.   |
+| `vault_ref`     | string   | created vault       | Reference to the vault. Use `"vault"` for the template-created vault. |
+| `paths`         | string[] | `["**"]`            | Glob patterns for secret paths the agent can access                   |
+| `permissions`   | string[] | `["read", "write"]` | Permission set: `read`, `write`, `rotate`                             |
+| `conditions`    | object   | `{}`                | Optional conditions (IP allowlist, time windows)                      |
+
+
+```json
+{
+  "policies": [
+    {
+      "principal_ref": "agents.primary",
+      "vault_ref": "vault",
+      "paths": ["api-keys/*", "keys/*"],
+      "permissions": ["read", "write"]
+    },
+    {
+      "principal_ref": "agents.primary",
+      "vault_ref": "vault",
+      "paths": ["config/**"],
+      "permissions": ["read"],
+      "conditions": {
+        "ip_allowlist": ["10.0.0.0/8"]
+      }
+    }
+  ]
+}
+```
+
+---
+
+## Full Template Example
+
+A complete template for a DeFi trading platform with Shroud inspection and Intents API:
+
+```json
+{
+  "name": "defi-trading-template",
+  "spec": {
+    "vault": {
+      "name": "trading-vault",
+      "description": "Keys and credentials for automated trading"
+    },
+    "agents": [
+      {
+        "name": "trade-executor",
+        "description": "Executes on-chain trades via Intents API",
+        "intents": { "enabled": true },
+        "shroud_enabled": true,
+        "shroud_config": {
+          "pii_policy": "redact",
+          "injection_threshold": 0.7,
+          "enable_secret_redaction": true,
+          "allowed_providers": ["openai", "anthropic"],
+          "max_requests_per_minute": 60,
+          "daily_budget_usd": 50
+        }
+      }
+    ],
+    "policies": [
+      {
+        "principal_ref": "agents.primary",
+        "vault_ref": "vault",
+        "paths": ["keys/*", "api-keys/*"],
+        "permissions": ["read"]
+      },
+      {
+        "principal_ref": "agents.primary",
+        "vault_ref": "vault",
+        "paths": ["config/**"],
+        "permissions": ["read", "write"]
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Auth Modes
+
+Set `auth_mode` when creating your platform app:
+
+
+| Mode           | Description                                                                                                                                                                             |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `silent`       | Users are provisioned without sign-in. Best for bot-first platforms (Telegram, Discord). The `claim_url` is still returned — share it so users can manage their vault in the dashboard. |
+| `user_signin`  | Users must sign in to 1Claw before claiming. Best for web apps where users already have accounts.                                                                                       |
+| `configurable` | Let the operator choose per-user at bootstrap time.                                                                                                                                     |
+
+
+## Billing Models
+
+
+| Model           | Description                                             |
+| --------------- | ------------------------------------------------------- |
+| `platform_pays` | All API usage is billed to the platform's subscription. |
+| `user_pays`     | Each connected user is billed individually.             |
+| `hybrid`        | Platform covers base usage; overages billed to users.   |
+
+
+---
+
+## Current Limitations
+
+- **Signing keys in templates.** Use **`spec.signing_keys.chains`** to request per-chain signing keys during bootstrap where supported. Operators can always fall back to `POST /v1/agents/{agent_id}/signing-keys` with `{ "chain": "ethereum" }` for flows that omit template signing keys or need add-on chains later.
+- **Delegated token exchange** (RFC 8693 `DelegatedTokenRequest`) is defined but not yet wired. Platform operators cannot issue delegated JWTs on behalf of connected users.
+- **Silent mode** always returns a `claim_url`. For fully headless (no-browser) flows, the claim token can be used programmatically in a future release.
+- `**plt_` keys** can see user metadata but cannot directly access user signing keys (`GET /v1/agents/{id}/signing-keys`). The org boundary prevents cross-org reads. Use the user's agent token or wait for delegated tokens.
+
+---
+
+## SDK Usage
+
+```typescript
+import { OneclawClient } from "@1claw/sdk";
+
+const client = new OneclawClient({
+  baseUrl: "https://api.1claw.xyz",
+  apiKey: "plt_YOUR_KEY",
+});
+
+// Create a template
+const template = await client.platform.createTemplate(appId, {
+  name: "default-template",
+  spec: {
+    vault: { name: "user-vault" },
+    agents: [{ name: "bot", intents: { enabled: true } }],
+    policies: [{ principal_ref: "agents.primary", vault_ref: "vault", paths: ["**"] }],
+  },
+});
+
+// Provision + bootstrap a user
+const user = await client.platform.upsertUser({
+  email: "user@example.com",
+  external_subject: "tg:12345",
+});
+const result = await client.platform.bootstrapUser(user.data.connection_id, {
+  template_id: template.data.id,
+});
+console.log("Claim URL:", result.data.claim_url);
+console.log("Agent ID:", result.data.summary.agent_id);
+```
+

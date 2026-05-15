@@ -38,8 +38,8 @@ def _prefer_summary_then_top(
 def _normalize_bootstrap_payload(body: dict[str, Any]) -> dict[str, Any]:
     """Flatten ``summary`` fields so onboarding can read stable top-level keys.
 
-    Live Platform API nests ``vault_id`` / ``agent_id`` / ``policy_ids`` under
-    ``summary``; older mocks and transitional shapes may expose them top-level.
+    Live Platform API nests ``vault_id`` / ``agent_id`` / ``policy_ids`` /
+    ``signing_key_chains`` under ``summary``; older mocks may expose these top-level.
 
     Preference order for each flattened field is **summary first**, then top-level.
     """
@@ -58,6 +58,9 @@ def _normalize_bootstrap_payload(body: dict[str, Any]) -> dict[str, Any]:
         out["agent_id"] = agent_id
     if policy_ids is not None:
         out["policy_ids"] = policy_ids
+    chains = _prefer_summary_then_top(outer=out, summary=summary, key="signing_key_chains")
+    if chains is not None:
+        out["signing_key_chains"] = chains
     claim_token = summary.get("claim_token") if "claim_token" in summary else out.get("claim_token")
     if claim_token not in (None, ""):
         out["claim_token"] = claim_token
@@ -134,18 +137,43 @@ class OneClawPlatformApiClient:
             raise HttpJsonRequestError(status_code=500, body_text="platform_bootstrap_non_object")
         return _normalize_bootstrap_payload(_unwrap_response_payload(raw))
 
+    def list_app_connected_users(self, *, app_id: str) -> list[dict[str, Any]]:
+        """Return rows from documented ``GET /v1/platform/apps/{appId}/users`` (plt_ bearer).
+
+        OpenAPI declares a bare JSON array; some gateways may envelope under ``{"data": …}``.
+        """
+
+        aid = (app_id or "").strip()
+        if not aid:
+            raise ValueError("app_id must not be empty.")
+        url = f"{self._root}/v1/platform/apps/{aid}/users"
+        raw = self._http.request_json(method="GET", url=url, headers=self._auth_headers())
+        if isinstance(raw, list):
+            return [x for x in raw if isinstance(x, dict)]
+
+        users: list[dict[str, Any]] = []
+        if isinstance(raw, dict):
+            unwrapped = _unwrap_response_payload(raw)
+            if isinstance(unwrapped, list):
+                users = [x for x in unwrapped if isinstance(x, dict)]
+            elif isinstance(unwrapped, dict):
+                nest = unwrapped.get("users")
+                if isinstance(nest, list):
+                    users = [x for x in nest if isinstance(x, dict)]
+                else:
+                    data = raw.get("data")
+                    if isinstance(data, list):
+                        users = [x for x in data if isinstance(x, dict)]
+
+        return users
+
     def get_connection(self, *, connection_id: str) -> dict[str, Any]:
-        """Fetch connection details for claim polling (Phase C).
+        """Legacy probe for ``GET /v1/platform/connections/{connection_id}``.
 
-        **Note:** As of verification against ``https://api.1claw.xyz/openapi.json``, there is **no**
-        published ``plt_`` endpoint for ``GET /v1/platform/connections/{connection_id}`` — only
-        ``POST …/bootstrap`` appears under ``/v1/platform/connections``. This helper therefore
-        calls that candidate path anyway (some deployments may expose it ahead of schema updates);
-        if polling returns persistent 404s, rely on webhook or another reconciliation channel until
-        1Claw documents the read API.
-
-        The JSON object should be shaped for
-        :func:`aurey.cloud.onboarding.claim_parser.parse_claim_ready_signal`.
+        Prefer :meth:`list_app_connected_users` plus
+        :func:`aurey.cloud.onboarding.claim_parser.parse_connected_user_claim_ready`
+        — that path matches published OpenAPI. This method remains for diagnostics
+        against non-standard deployments only.
         """
 
         cid = (connection_id or "").strip()

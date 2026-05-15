@@ -107,3 +107,72 @@ def test_platform_client_unwraps_data_envelope() -> None:
     )
     up = client.upsert_user(subject_token="t", display_name=None)
     assert up["connection_id"] == "conn_env"
+
+
+def test_platform_client_bootstrap_normalizes_signing_key_chains_from_summary() -> None:
+    http = ScriptedHttpClient(
+        [
+            (
+                lambda method, url, headers, json_body: method == "POST" and "/bootstrap" in url,
+                {
+                    "claim_url": "https://claim.example/sk",
+                    "summary": {
+                        "vault_id": "v_sk",
+                        "agent_id": "a_sk",
+                        "signing_key_chains": ["ethereum", "solana"],
+                    },
+                },
+            ),
+        ]
+    )
+    client = OneClawPlatformApiClient(base_url="https://api.example", api_key="plt_test", http=http)
+    boot = client.bootstrap_connection(connection_id="conn_sk", template_id="tpl_sk")
+    assert boot["signing_key_chains"] == ["ethereum", "solana"]
+    assert boot["vault_id"] == "v_sk"
+
+
+def test_platform_client_list_app_connected_users_path_and_array() -> None:
+    payload = [{"connection_id": "c1", "claimed_at": "2026-01-01T00:00:00Z"}]
+    http = ScriptedHttpClient(
+        [
+            (
+                lambda method, url, headers, json_body: method == "GET"
+                and url == "https://api.1claw.xyz/v1/platform/apps/app_x/users",
+                payload,
+            ),
+        ]
+    )
+    client = OneClawPlatformApiClient(
+        base_url="https://api.1claw.xyz", api_key="plt_test", http=http
+    )
+    rows = client.list_app_connected_users(app_id="app_x")
+    assert rows == payload
+    assert http.calls[0]["method"] == "GET"
+
+
+def test_platform_client_list_app_connected_users_unwraps_data_array() -> None:
+    nested = [{"connection_id": "c_env", "status": "ready"}]
+    http = ScriptedHttpClient(
+        [
+            (
+                lambda *args, **kwargs: True,
+                {"data": nested},
+            ),
+        ]
+    )
+    client = OneClawPlatformApiClient(base_url="https://example", api_key="plt_z", http=http)
+    assert client.list_app_connected_users(app_id="app_env") == nested
+
+
+def test_platform_client_list_app_connected_users_nested_users_key() -> None:
+    nested = [{"connection_id": "c_u"}]
+    http = ScriptedHttpClient(
+        [
+            (
+                lambda *args, **kwargs: True,
+                {"data": {"users": nested}},
+            ),
+        ]
+    )
+    client = OneClawPlatformApiClient(base_url="https://example", api_key="plt_z", http=http)
+    assert client.list_app_connected_users(app_id="app_u") == nested

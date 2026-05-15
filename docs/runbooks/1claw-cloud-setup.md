@@ -7,13 +7,13 @@ Platform API details in this repo (template `spec`, auth modes, limitations) are
 ## Requirements & limitations
 
 - **Platform APIs need a Pro+ 1Claw plan** — see upstream billing docs.
-- **Template `spec`** has three optional top-level sections: **`vault`**, **`agents[]`**, **`policies[]`**. Signing keys **cannot** be declared in templates; after each user bootstrap, provision keys with `POST /v1/agents/{agent_id}/signing-keys`.
+- **Template `spec`** includes **`vault`**, **`agents[]`**, **`policies[]`**, and **`signing_keys`** (chain identifiers provisioned when the bootstrap template specifies them — see **`platform-api.md`**). Hosted Aurey persists `summary.signing_key_chains` from the bootstrap response on the `platform_users` row when present.
 - **`intents` in templates** use the nested flag `"intents": { "enabled": true }`. This differs from registering an agent directly, where `intents_api_enabled` appears flat — the bootstrap stack maps between them (see caution in `platform-api.md`).
 - **`auth_mode: silent`** still returns a **`claim_url`** for claim / dashboard access — plan for bot-first UX accordingly.
 - **Delegated token exchange** (`POST /v1/auth/delegated-token`) is described upstream but **not wired** for platform operators yet; do not rely on delegated JWT issuance until 1Claw ships it.
 - **`plt_` keys** cannot read user signing keys (`GET /v1/agents/{id}/signing-keys`) across the user org boundary; use future delegated flows or user-held credentials.
 - **Hosted grant JWT path:** set `AUREY_HOSTED_USER_GRANT_SECRET_PATH_TEMPLATE` to an operator-vault path pattern (placeholders `{vault_id}`, `{connection_id}`, `{agent_id}`) and **write each user’s grant bearer** to that path after they complete claim (until 1Claw automates this). If unset, Aurey stores only a synthetic locator that will not resolve in `SecretStore`.
-- **Claim polling:** background poll calls `GET /v1/platform/connections/{connection_id}`. Canonical OpenAPI at `api.1claw.xyz` documents `POST …/connections/{connectionId}/bootstrap` for `plt_` keys but **not** that GET route — deployments may **404** until 1Claw publishes it; use `POST /v1/cloud/onboarding/claim-events` when you have a trustworthy claim signal.
+- **Claim polling:** the background worker calls **`GET /v1/platform/apps/{app_id}/users`** once per poll tick (Bearer `plt_`), matches each pending user’s `connection_id` to the returned rows, and treats non-empty **`claimed_at`** (or permissive **`status`** heuristics) as “claim complete”. Canonical upstream docs: [Platform API — guides](https://docs.1claw.xyz/guides/platform-api). Prefer this over undocumented `GET /v1/platform/connections/{connection_id}` probes. Until you have a webhook, this list endpoint is the supported operator-visible signal path.
 
 ## 1. Platform (hosted operator)
 

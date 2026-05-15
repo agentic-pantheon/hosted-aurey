@@ -1,13 +1,16 @@
 """Tolerant parsing for "claim is complete" signals from 1Claw Platform payloads.
 
-Assumptions (single place — adjust when the real ``GET /connections/{id}`` schema is known):
+Primary integration (documented OpenAPI):
 
-- The usable shape is either a flattened connection object or ``{"data": {...}}`` (handled
-  upstream by :func:`aurey.cloud.platform._unwrap_response_payload`).
-- Readiness may appear as boolean flags, string enums, or nested status objects.
-- We deliberately avoid trusting or persisting raw secrets (e.g. grant tokens); this module
-  only answers whether the wallet / claim flow appears done and lists which *keys* looked
-  relevant for observability metadata.
+- Rows from ``GET /v1/platform/apps/{appId}/users``: use
+  :func:`parse_connected_user_claim_ready` (checks ``claimed_at`` and ``status``).
+
+Legacy / diagnostic shapes:
+
+- Flattened objects passed to :func:`parse_claim_ready_signal` (booleans, nested ``claim``, etc.)
+
+We avoid trusting or persisting raw secrets; this module only answers whether the wallet /
+claim flow appears done for audit metadata keys.
 """
 
 from __future__ import annotations
@@ -117,4 +120,18 @@ def parse_claim_ready_signal(payload: dict[str, Any]) -> ClaimReadyParseResult:
     return ClaimReadyParseResult(ready=ready, matched_keys=tuple(sorted(matched)))
 
 
-__all__ = ["ClaimReadyParseResult", "parse_claim_ready_signal"]
+def parse_connected_user_claim_ready(record: dict[str, Any]) -> ClaimReadyParseResult:
+    """Parse ``PlatformConnectedUserResponse`` rows from apps users listing."""
+
+    claimed_at = record.get("claimed_at")
+    if claimed_at is not None and str(claimed_at).strip():
+        return ClaimReadyParseResult(ready=True, matched_keys=("claimed_at",))
+    # Fall back to status / flag heuristics on the same row.
+    return parse_claim_ready_signal(record)
+
+
+__all__ = [
+    "ClaimReadyParseResult",
+    "parse_claim_ready_signal",
+    "parse_connected_user_claim_ready",
+]

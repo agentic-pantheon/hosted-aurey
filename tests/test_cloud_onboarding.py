@@ -12,7 +12,10 @@ from aurey.cloud.db import Base
 from aurey.cloud.db.models import OnboardingEvent, OnboardingPhase, PlatformUser
 from aurey.cloud.oidc import OidcSubjectTokenSigner
 from aurey.cloud.onboarding import InvalidOnboardingTransition, OnboardingService
-from aurey.cloud.onboarding.claim_parser import parse_claim_ready_signal
+from aurey.cloud.onboarding.claim_parser import (
+    parse_claim_ready_signal,
+    parse_connected_user_claim_ready,
+)
 from aurey.cloud.onboarding.grant_repository import SqlGrantReferenceRepository
 from aurey.cloud.onboarding.state_machine import assert_transition_allowed, coerce_phase_value
 from aurey.cloud.platform import OneClawPlatformApiClient
@@ -103,9 +106,7 @@ def test_onboarding_first_start_calls_upsert_and_bootstrap(monkeypatch) -> None:
 
     session = svc._session_factory()
     try:
-        row = session.scalars(
-            select(PlatformUser).where(PlatformUser.telegram_user_id == 42)
-        ).one()
+        row = session.scalars(select(PlatformUser).where(PlatformUser.telegram_user_id == 42)).one()
         assert row.connection_id == "conn_1"
         assert row.onboarding_state == OnboardingPhase.AWAITING_CLAIM.value
         assert row.claim_url.startswith("https://claim.example")
@@ -142,6 +143,54 @@ def test_onboarding_bootstrap_nested_summary_populates_agent_and_vault(monkeypat
         ).one()
         assert row.vault_id == "vlt_nested"
         assert row.agent_id == "agt_nested"
+    finally:
+        session.close()
+
+
+def test_onboarding_bootstrap_persists_signing_key_chains_from_summary(monkeypatch) -> None:
+    monkeypatch.setenv("AUREY_PLT_KEY", "plt_secret")
+    monkeypatch.setenv("AUREY_OIDC_PEM", _rsa_pem())
+
+    http = ScriptedHttpClient(
+        [
+            (
+                lambda method, url, headers, json_body: "users/upsert" in url,
+                {"connection_id": "conn_chains", "id": "usr_ch"},
+            ),
+            (
+                lambda method, url, headers, json_body: "bootstrap" in url,
+                {
+                    "claim_url": "https://claim.example/chains",
+                    "summary": {
+                        "vault_id": "vlt_c",
+                        "agent_id": "agt_c",
+                        "signing_key_chains": ["solana", " ethereum ", "", "  "],
+                    },
+                },
+            ),
+        ]
+    )
+    svc = _make_svc(http=http)
+    svc.run_telegram_start(telegram_user_id=8802, display_name="Chains")
+
+    session = svc._session_factory()
+    try:
+        row = session.scalars(
+            select(PlatformUser).where(PlatformUser.telegram_user_id == 8802)
+        ).one()
+        assert row.provisioned_signing_key_chains == ["solana", "ethereum"]
+        bootstrap_ev = session.scalars(
+            select(OnboardingEvent)
+            .where(
+                OnboardingEvent.platform_user_id == row.id,
+                OnboardingEvent.event_type == "platform_bootstrap_ok",
+            )
+            .order_by(OnboardingEvent.id.asc())
+            .limit(1)
+        ).first()
+        assert bootstrap_ev is not None
+        assert bootstrap_ev.payload is not None
+        assert bootstrap_ev.payload.get("signing_key_chain_count") == 2
     finally:
         session.close()
 
@@ -202,6 +251,23 @@ def test_claim_parser_matches_common_shapes() -> None:
     assert parse_claim_ready_signal({"connection_id": "x"}).ready is False
 
 
+def test_claim_parser_connected_user_claimed_at_ready() -> None:
+    parsed = parse_connected_user_claim_ready({"connection_id": "c1", "claimed_at": "2026-05-01"})
+    assert parsed.ready is True
+    assert "claimed_at" in parsed.matched_keys
+    pend = parse_connected_user_claim_ready({"connection_id": "c2", "status": "pending"})
+    assert pend.ready is False
+
+
+def _match_list_app_users_get(app_id: str = "app_9"):
+    marker = f"/v1/platform/apps/{app_id}/users"
+
+    def _pred(method: str, url: str, headers: object, json_body: object) -> bool:
+        return method == "GET" and marker in url and url.rstrip("/").endswith("/users")
+
+    return _pred
+
+
 def test_poll_claim_marks_ready_and_sets_grant_placeholder(monkeypatch) -> None:
     monkeypatch.setenv("AUREY_PLT_KEY", "plt_secret")
     monkeypatch.setenv("AUREY_OIDC_PEM", _rsa_pem())
@@ -217,9 +283,13 @@ def test_poll_claim_marks_ready_and_sets_grant_placeholder(monkeypatch) -> None:
                 {"claim_url": "https://claim.example/z", "vault_id": "vlt_z", "agent_id": "agt_z"},
             ),
             (
-                lambda method, url, headers, json_body: method == "GET"
-                and url.endswith("/v1/platform/connections/conn_p1"),
-                {"claimed": True},
+                _match_list_app_users_get(),
+                [
+                    {
+                        "connection_id": "conn_p1",
+                        "claimed_at": "2026-05-01T00:00:00Z",
+                    },
+                ],
             ),
         ]
     )
@@ -229,14 +299,12 @@ def test_poll_claim_marks_ready_and_sets_grant_placeholder(monkeypatch) -> None:
     n = svc.poll_awaiting_claims(batch_limit=10)
     assert n == 1
     assert any(
-        c["method"] == "GET" and "connections/conn_p1" in c["url"] for c in http.calls
+        c["method"] == "GET" and "/v1/platform/apps/app_9/users" in c["url"] for c in http.calls
     )
 
     session = svc._session_factory()
     try:
-        row = session.scalars(
-            select(PlatformUser).where(PlatformUser.telegram_user_id == 99)
-        ).one()
+        row = session.scalars(select(PlatformUser).where(PlatformUser.telegram_user_id == 99)).one()
         assert row.onboarding_state == OnboardingPhase.READY.value
         assert row.grant_ref_path is not None
         assert row.grant_ref_path.startswith("vaults/vlt_z/delegated_grants/connections/conn_p1")
@@ -268,9 +336,8 @@ def test_poll_claim_uses_configured_grant_secret_path_template(monkeypatch) -> N
                 },
             ),
             (
-                lambda method, url, headers, json_body: method == "GET"
-                and url.endswith("/v1/platform/connections/conn_tpl"),
-                {"claimed": True},
+                _match_list_app_users_get(),
+                [{"connection_id": "conn_tpl", "claimed_at": "2026-05-02T00:00:00Z"}],
             ),
         ]
     )
@@ -286,9 +353,7 @@ def test_poll_claim_uses_configured_grant_secret_path_template(monkeypatch) -> N
         row = session.scalars(
             select(PlatformUser).where(PlatformUser.telegram_user_id == 881)
         ).one()
-        assert (
-            row.grant_ref_path == "aurey/hosted/grants/conn_tpl/agent-agt_tpl"
-        )
+        assert row.grant_ref_path == "aurey/hosted/grants/conn_tpl/agent-agt_tpl"
     finally:
         session.close()
 
@@ -308,9 +373,8 @@ def test_poll_claim_noop_when_not_ready(monkeypatch) -> None:
                 {"claim_url": "https://claim.example/nr", "vault_id": "v1", "agent_id": "a1"},
             ),
             (
-                lambda method, url, headers, json_body: method == "GET"
-                and url.endswith("/v1/platform/connections/conn_nr"),
-                {"status": "pending"},
+                _match_list_app_users_get(),
+                [{"connection_id": "conn_nr", "status": "pending"}],
             ),
         ]
     )
@@ -320,9 +384,7 @@ def test_poll_claim_noop_when_not_ready(monkeypatch) -> None:
 
     session = svc._session_factory()
     try:
-        row = session.scalars(
-            select(PlatformUser).where(PlatformUser.telegram_user_id == 3)
-        ).one()
+        row = session.scalars(select(PlatformUser).where(PlatformUser.telegram_user_id == 3)).one()
         assert row.onboarding_state == OnboardingPhase.AWAITING_CLAIM.value
         assert row.grant_ref_path is None
     finally:
@@ -357,19 +419,17 @@ def test_poll_claim_http_failure_is_tolerant(monkeypatch) -> None:
 
     session = svc._session_factory()
     try:
-        row = session.scalars(
-            select(PlatformUser).where(PlatformUser.telegram_user_id == 8)
-        ).one()
-        last = (
-            session.scalars(
-                select(OnboardingEvent)
-                .where(OnboardingEvent.platform_user_id == row.id)
-                .order_by(OnboardingEvent.id.desc())
-                .limit(1)
-            ).first()
-        )
+        row = session.scalars(select(PlatformUser).where(PlatformUser.telegram_user_id == 8)).one()
+        last = session.scalars(
+            select(OnboardingEvent)
+            .where(OnboardingEvent.platform_user_id == row.id)
+            .order_by(OnboardingEvent.id.desc())
+            .limit(1)
+        ).first()
         assert last is not None
-        assert last.event_type == "claim_poll_http_failed"
+        assert last.event_type == "claim_poll_users_list_failed"
+        assert last.payload is not None
+        assert last.payload.get("reason") == "platform_users_list_unavailable"
     finally:
         session.close()
 
@@ -393,9 +453,8 @@ def test_user_principal_for_ready_user(monkeypatch) -> None:
                 },
             ),
             (
-                lambda method, url, headers, json_body: method == "GET"
-                and url.endswith("/v1/platform/connections/conn_princ"),
-                {"claimed": True},
+                _match_list_app_users_get(),
+                [{"connection_id": "conn_princ", "status": "ready"}],
             ),
         ]
     )

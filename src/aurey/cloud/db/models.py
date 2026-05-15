@@ -37,6 +37,11 @@ class PlatformUser(Base):
     vault_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
     agent_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
 
+    provisioned_signing_key_chains: Mapped[list[Any] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
     # Delegated-grant reference only (vault path / logical locator). Never store raw tokens.
     grant_ref_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     grant_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
