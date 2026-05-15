@@ -104,6 +104,39 @@ def test_onboarding_first_start_calls_upsert_and_bootstrap(monkeypatch) -> None:
         session.close()
 
 
+def test_onboarding_bootstrap_nested_summary_populates_agent_and_vault(monkeypatch) -> None:
+    monkeypatch.setenv("AUREY_PLT_KEY", "plt_secret")
+    monkeypatch.setenv("AUREY_OIDC_PEM", _rsa_pem())
+
+    http = ScriptedHttpClient(
+        [
+            (
+                lambda method, url, headers, json_body: "users/upsert" in url,
+                {"connection_id": "conn_nested", "id": "usr_n"},
+            ),
+            (
+                lambda method, url, headers, json_body: "bootstrap" in url,
+                {
+                    "claim_url": "https://claim.example/nested-path",
+                    "summary": {"vault_id": "vlt_nested", "agent_id": "agt_nested"},
+                },
+            ),
+        ]
+    )
+    svc = _make_svc(http=http)
+    svc.run_telegram_start(telegram_user_id=7701, display_name="Nested")
+
+    session = svc._session_factory()
+    try:
+        row = session.scalars(
+            select(PlatformUser).where(PlatformUser.telegram_user_id == 7701)
+        ).one()
+        assert row.vault_id == "vlt_nested"
+        assert row.agent_id == "agt_nested"
+    finally:
+        session.close()
+
+
 def test_onboarding_repeat_start_skips_platform_calls(monkeypatch) -> None:
     """Once ``claim_url`` exists, further starts only re-send the link (no HTTP)."""
 

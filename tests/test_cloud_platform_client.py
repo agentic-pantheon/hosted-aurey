@@ -60,6 +60,37 @@ def test_platform_client_get_connection_uses_expected_path() -> None:
     assert http.calls[0]["method"] == "GET"
 
 
+def test_platform_client_bootstrap_normalizes_nested_summary() -> None:
+    http = ScriptedHttpClient(
+        [
+            (
+                lambda method, url, headers, json_body: method == "POST"
+                and "/bootstrap" in url,
+                {
+                    "claim_url": "https://claim.example/nested",
+                    "claim_token": "ct_abc",
+                    "summary": {
+                        "vault_id": "vlt_sum",
+                        "agent_id": "agt_sum",
+                        "policy_ids": ["pol_1"],
+                    },
+                },
+            ),
+        ]
+    )
+    client = OneClawPlatformApiClient(
+        base_url="https://api.example",
+        api_key="plt_test",
+        http=http,
+    )
+    boot = client.bootstrap_connection(connection_id="conn_x", template_id="tpl_z")
+    assert boot["vault_id"] == "vlt_sum"
+    assert boot["agent_id"] == "agt_sum"
+    assert boot["policy_ids"] == ["pol_1"]
+    assert boot["claim_url"].startswith("https://claim.example")
+    assert boot["claim_token"] == "ct_abc"
+
+
 def test_platform_client_unwraps_data_envelope() -> None:
     http = ScriptedHttpClient(
         [

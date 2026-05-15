@@ -16,6 +16,54 @@ def _unwrap_response_payload(body: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
+def _prefer_summary_then_top(
+    *,
+    outer: dict[str, Any],
+    summary: dict[str, Any],
+    key: str,
+) -> Any:
+    """Prefer ``summary[key]``, then meaningful top-level ``outer[key]``."""
+
+    inner = summary.get(key)
+    outer_v = outer.get(key)
+    for candidate in (inner, outer_v):
+        if candidate is None:
+            continue
+        if isinstance(candidate, str) and not candidate.strip():
+            continue
+        return candidate
+    return None
+
+
+def _normalize_bootstrap_payload(body: dict[str, Any]) -> dict[str, Any]:
+    """Flatten ``summary`` fields so onboarding can read stable top-level keys.
+
+    Live Platform API nests ``vault_id`` / ``agent_id`` / ``policy_ids`` under
+    ``summary``; older mocks and transitional shapes may expose them top-level.
+
+    Preference order for each flattened field is **summary first**, then top-level.
+    """
+
+    out = dict(body)
+    raw_summary = body.get("summary")
+    summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+
+    vault_id = _prefer_summary_then_top(outer=out, summary=summary, key="vault_id")
+    agent_id = _prefer_summary_then_top(outer=out, summary=summary, key="agent_id")
+    policy_ids = _prefer_summary_then_top(outer=out, summary=summary, key="policy_ids")
+
+    if vault_id is not None:
+        out["vault_id"] = vault_id
+    if agent_id is not None:
+        out["agent_id"] = agent_id
+    if policy_ids is not None:
+        out["policy_ids"] = policy_ids
+    claim_token = summary.get("claim_token") if "claim_token" in summary else out.get("claim_token")
+    if claim_token not in (None, ""):
+        out["claim_token"] = claim_token
+    return out
+
+
 class OneClawPlatformApiClient:
     """Minimal platform API surface for hosted onboarding (Phase B)."""
 
@@ -84,13 +132,14 @@ class OneClawPlatformApiClient:
         )
         if not isinstance(raw, dict):
             raise HttpJsonRequestError(status_code=500, body_text="platform_bootstrap_non_object")
-        return _unwrap_response_payload(raw)
+        return _normalize_bootstrap_payload(_unwrap_response_payload(raw))
 
     def get_connection(self, *, connection_id: str) -> dict[str, Any]:
         """Fetch connection details for claim polling (Phase C).
 
         **Assumption:** ``GET /v1/platform/connections/{connection_id}`` exists and returns a
-        JSON object eventually consumed by :func:`aurey.cloud.onboarding.claim_parser.parse_claim_ready_signal`.
+        JSON object eventually consumed by
+        :func:`aurey.cloud.onboarding.claim_parser.parse_claim_ready_signal`.
         """
 
         cid = (connection_id or "").strip()
