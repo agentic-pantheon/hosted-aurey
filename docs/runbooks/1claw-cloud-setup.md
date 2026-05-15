@@ -2,10 +2,21 @@
 
 Use this checklist when onboarding a new environment (local, staging, or Railway). Exact console labels may change; follow the current [1Claw docs](https://docs.1claw.xyz) if steps diverge.
 
+Platform API details in this repo (template `spec`, auth modes, limitations) are summarized in **[platform-api.md](../../platform-api.md)** — mirror that shape when calling `POST /v1/platform/apps/{app_id}/templates`.
+
+## Requirements & limitations
+
+- **Platform APIs need a Pro+ 1Claw plan** — see upstream billing docs.
+- **Template `spec`** has three optional top-level sections: **`vault`**, **`agents[]`**, **`policies[]`**. Signing keys **cannot** be declared in templates; after each user bootstrap, provision keys with `POST /v1/agents/{agent_id}/signing-keys`.
+- **`intents` in templates** use the nested flag `"intents": { "enabled": true }`. This differs from registering an agent directly, where `intents_api_enabled` appears flat — the bootstrap stack maps between them (see caution in `platform-api.md`).
+- **`auth_mode: silent`** still returns a **`claim_url`** for claim / dashboard access — plan for bot-first UX accordingly.
+- **Delegated token exchange** (`POST /v1/auth/delegated-token`) is described upstream but **not wired** for platform operators yet; do not rely on delegated JWT issuance until 1Claw ships it.
+- **`plt_` keys** cannot read user signing keys (`GET /v1/agents/{id}/signing-keys`) across the user org boundary; use future delegated flows or user-held credentials.
+
 ## 1. Platform (hosted operator)
 
 1. Sign in to the 1Claw console and **register or select the Aurey platform app** (record the app id as `AUREY_PLT_APP_ID` when exposing it to automation).
-2. Create or choose an **agent template** for Aurey workloads and note `AUREY_PLT_TEMPLATE_ID`.
+2. Create an **agent template** whose `spec` follows `platform-api.md` (enable Intents with `intents.enabled`, set policies for vault paths your agent needs) and note `AUREY_PLT_TEMPLATE_ID`.
 3. Issue a **platform app API key** for provisioning APIs (store the value only in your secret manager; reference it via `AUREY_PLT_APP_API_KEY` and set `AUREY_PLT_APP_API_KEY_SECRET_SOURCE` if you use a non-default env var name).
 
 ## 2. Operator runtime (per deployment)

@@ -65,7 +65,7 @@ uv sync --group dev --extra telegram # optional Telegram bot deps
 cp .env.example .env
 ```
 
-Set at least `**AUREY_OCV_VAULT_ID**`, `**AUREY_OCV_AGENT_API_KEY**` (the operator agent key’s **value** lives in env; vault entries remain path-only), optional **`AUREY_PLT_*`** identifiers for hosted provisioning (see the runbook), and your model provider (`**OPENAI_API_KEY**` when using defaults like `openai:gpt-4o-mini`). See `[.env.example](.env.example)` and `[docs/runbooks/1claw-cloud-setup.md](docs/runbooks/1claw-cloud-setup.md)`. **Do not inline production secrets.**
+Set at least `**AUREY_OCV_VAULT_ID**`, `**AUREY_OCV_AGENT_API_KEY**` (the operator agent key’s **value** lives in env; vault entries remain path-only), optional **`AUREY_PLT_*`** identifiers for hosted provisioning (see the runbook and root **[platform-api.md](platform-api.md)** for bootstrap template fields), and your model provider (`**OPENAI_API_KEY**` when using defaults like `openai:gpt-4o-mini`). See `[.env.example](.env.example)` and `[docs/runbooks/1claw-cloud-setup.md](docs/runbooks/1claw-cloud-setup.md)`. **Do not inline production secrets.**
 
 ### 3 · Run the HTTP API locally
 
