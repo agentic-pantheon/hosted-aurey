@@ -1,0 +1,5 @@
+[build]
+buildCommand = "uv sync --frozen --no-dev --extra api --extra telegram"
+
+[deploy]
+startCommand = "uv run python run_telegram.py"

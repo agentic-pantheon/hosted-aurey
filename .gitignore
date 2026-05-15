@@ -1,0 +1,49 @@
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+*.manifest
+*.spec
+
+# Logs & local tooling
+pip-log.txt
+pip-delete-this-directory.txt
+*.log
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+ENV/
+
+# Environment files (keep .env.example tracked)
+.env
+.env.local
+.env.*.local
+
+# Test / tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+.mypy_cache/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# LiFi Composer eval: ignore tee’d logs; harness stays tracked
+eval/composer-li-fi/runs/**
+!eval/composer-li-fi/runs/.gitignore
+agentic_pantheon_business_strategy.md

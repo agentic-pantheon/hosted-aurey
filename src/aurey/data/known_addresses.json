@@ -1,0 +1,266 @@
+{
+  "version": 1,
+  "notes": "MORPHO.morpho_blue is a placeholder (zero address) on all chains until curated deployments are added. Verify token addresses before mainnet use; omit or correct any entry you distrust.",
+  "chain_name_to_id": {
+    "ethereum": 1,
+    "base": 8453,
+    "arbitrum": 42161,
+    "optimism": 10,
+    "monad": 143
+  },
+  "chains": {
+    "1": {
+      "tokens": {
+        "USDC": {
+          "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+          "name": "USD Coin"
+        },
+        "USDT": {
+          "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+          "name": "Tether USD"
+        },
+        "DAI": {
+          "address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+          "name": "Dai Stablecoin"
+        },
+        "WBTC": {
+          "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+          "name": "Wrapped BTC"
+        },
+        "WETH": {
+          "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+          "name": "Wrapped Ether"
+        },
+        "LINK": {
+          "address": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+          "name": "Chainlink"
+        },
+        "GHO": {
+          "address": "0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f",
+          "name": "GHO Stablecoin"
+        },
+        "stkGHO": {
+          "address": "0x1a88Df1cFe15Af22B3c4c783D4e6F7F9e0C1885d",
+          "name": "Staked GHO"
+        },
+        "wstETH": {
+          "address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
+          "name": "Wrapped liquid staked Ether 2.0"
+        },
+        "rETH": {
+          "address": "0xae78736Cd615f374D3085123A210448E74Fc6393",
+          "name": "Rocket Pool ETH"
+        },
+        "crvUSD": {
+          "address": "0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E",
+          "name": "Curve USD"
+        },
+        "EURC": {
+          "address": "0x1aBaEA1f7C830bD89Acc67eC4af516284b1bC33c",
+          "name": "Euro Coin"
+        },
+        "cbETH": {
+          "address": "0xBe9895146f7AF43049ca1c1AE358B0541Ea49704",
+          "name": "Coinbase Wrapped Staked ETH"
+        },
+        "SOL": {
+          "address": "0xD31a59c85aE9D8edEFeC411D448f90841571b89c",
+          "name": "Wrapped SOL"
+        }
+      },
+      "protocols": {
+        "AAVE_V3": {
+          "pool_addresses_provider": "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e",
+          "pool": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
+        },
+        "MORPHO": {
+          "morpho_blue": "0x0000000000000000000000000000000000000000"
+        }
+      }
+    },
+    "8453": {
+      "tokens": {
+        "USDC": {
+          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "name": "USD Coin"
+        },
+        "USDT": {
+          "address": "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
+          "name": "Tether USD"
+        },
+        "DAI": {
+          "address": "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb",
+          "name": "Dai Stablecoin"
+        },
+        "WBTC": {
+          "address": "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c",
+          "name": "Wrapped BTC"
+        },
+        "WETH": {
+          "address": "0x4200000000000000000000000000000000000006",
+          "name": "Wrapped Ether"
+        },
+        "LINK": {
+          "address": "0x88Fb150BDc53A65fe94Dea0c9BA0a6dAf8C6e196",
+          "name": "Chainlink"
+        },
+        "SOL": {
+          "address": "0x311935Cd80B76769bF2ecC9D8Ab7635b2139cf82",
+          "name": "Wrapped SOL"
+        },
+        "GHO": {
+          "address": "0x6Bb7a212910682DCFdbd5BCBb3e28FB4E8da10Ee",
+          "name": "GHO Stablecoin"
+        },
+        "wstETH": {
+          "address": "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452",
+          "name": "Wrapped liquid staked Ether 2.0"
+        },
+        "rETH": {
+          "address": "0xB6fe221Fe9EeF5aBa221c348bA20A1Bf5e73624c",
+          "name": "Rocket Pool ETH"
+        },
+        "EURC": {
+          "address": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+          "name": "Euro Coin"
+        },
+        "cbETH": {
+          "address": "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22",
+          "name": "Coinbase Wrapped Staked ETH"
+        },
+        "sparkUSDC": {
+          "address": "0x7BfA7C4f149E7415b73bdeDfe609237e29CBF34A",
+          "name": "Spark USDC"
+        }
+      },
+      "protocols": {
+        "AAVE_V3": {
+          "pool_addresses_provider": "0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D",
+          "pool": "0xa238dD80C259A72E81D25c0dfF3B6D9c19B8c6f3"
+        },
+        "MORPHO": {
+          "sparkUSDC": "0x7BfA7C4f149E7415b73bdeDfe609237e29CBF34A"
+        }
+      }
+    },
+    "42161": {
+      "tokens": {
+        "USDC": {
+          "address": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+          "name": "USD Coin"
+        },
+        "USDT": {
+          "address": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+          "name": "Tether USD"
+        },
+        "DAI": {
+          "address": "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
+          "name": "Dai Stablecoin"
+        },
+        "WBTC": {
+          "address": "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",
+          "name": "Wrapped BTC"
+        },
+        "WETH": {
+          "address": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+          "name": "Wrapped Ether"
+        },
+        "LINK": {
+          "address": "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4",
+          "name": "Chainlink"
+        },
+        "GHO": {
+          "address": "0x7dfF72693f6A4149b17e7C6314655f6A9F7c8B33",
+          "name": "GHO Stablecoin"
+        },
+        "SY-wstETH": {
+          "address": "0x80c12D5b6Cc494632Bf11b03F09436c8B61Cc5Df",
+          "name": "SY wstETH"
+        },
+        "rETH": {
+          "address": "0xEC70Dcb4A1EFa46b8F2D97C310C9c4790ba5ffA8",
+          "name": "Rocket Pool ETH"
+        },
+        "SNX": {
+          "address": "0xCbA56e55248D38DaA7D874c08426f65921484704",
+          "name": "Synthetix"
+        },
+        "crvUSD": {
+          "address": "0x498Bf2B1e120FeD3ad3D42EA2165E9b73f99C1e5",
+          "name": "Curve USD"
+        },
+        "ARB": {
+          "address": "0x912CE59144191C1204E64559FE8253a0e49E6548",
+          "name": "Arbitrum"
+        }
+      },
+      "protocols": {
+        "AAVE_V3": {
+          "pool_addresses_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
+          "pool": "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+        },
+        "MORPHO": {
+          "morpho_blue": "0x0000000000000000000000000000000000000000"
+        }
+      }
+    },
+    "10": {
+      "tokens": {
+        "USDC": {
+          "address": "0x0b2c639c533813AB4FCa6D36533e9365af3daf6f",
+          "name": "USD Coin"
+        },
+        "USDT": {
+          "address": "0x94B008AA00579C13Bf263a176c224c74aAf5ffAd",
+          "name": "Tether USD"
+        },
+        "DAI": {
+          "address": "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
+          "name": "Dai Stablecoin"
+        },
+        "WBTC": {
+          "address": "0x68F180FCcEe6836688fcD8da20ffA843874bC260",
+          "name": "Wrapped BTC"
+        },
+        "WETH": {
+          "address": "0x4200000000000000000000000000000000000006",
+          "name": "Wrapped Ether"
+        },
+        "LINK": {
+          "address": "0x350a791BFC2c21FbC9D897b05D054C893992A557",
+          "name": "Chainlink"
+        },
+        "SNX": {
+          "address": "0x8700dAe30Bc7Bf4aFEC867BFd00A79dd32ccBd76",
+          "name": "Synthetix"
+        },
+        "rETH": {
+          "address": "0x9BceF72Be871E1C4A82d0653F02e34B733d9b47f",
+          "name": "Rocket Pool ETH"
+        },
+        "OP": {
+          "address": "0x4200000000000000000000000000000000000042",
+          "name": "Optimism"
+        }
+      },
+      "protocols": {
+        "AAVE_V3": {
+          "pool_addresses_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
+          "pool": "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+        },
+        "MORPHO": {
+          "morpho_blue": "0x0000000000000000000000000000000000000000"
+        }
+      }
+    },
+    "143": {
+      "tokens": {},
+      "protocols": {
+        "AAVE_V3": {},
+        "MORPHO": {
+          "morpho_blue": "0x0000000000000000000000000000000000000000"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aurey"
+version = "0.1.0"
+description = "Standalone deep agent service (LangChain Deep Agents, LangGraph, 1Claw-ready)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain",
+    "langchain-openai",
+    "langgraph",
+    "deepagents>=0.5.8",
+    "pydantic-settings",
+    "rich>=13.7",
+    "web3>=6.11.0",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi",
+    "uvicorn[standard]",
+    "langgraph-checkpoint-postgres>=3.1.0",
+    "psycopg[binary]>=3.2.0",
+]
+telegram = [
+    "python-telegram-bot>=21",
+]
+
+[dependency-groups]
+dev = [
+    "fastapi>=0.115",
+    "langgraph-checkpoint-postgres>=3.1.0",
+    "pytest>=8",
+    "ruff>=0.8",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+aurey = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

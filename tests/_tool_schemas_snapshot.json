@@ -1,0 +1,1107 @@
+{
+  "alchemy_get_portfolio_tokens": {
+    "description": "Alchemy portfolio (tokens-by-wallet); requires ``alchemy_api_secret_path`` in settings.",
+    "properties": {
+      "chain": {
+        "description": "Chain slug (e.g. ethereum, base).",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "wallet_address": {
+        "description": "Wallet to list token balances for.",
+        "minLength": 1,
+        "title": "Wallet Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "wallet_address"
+    ],
+    "title": "AlchemyPortfolioArgs",
+    "type": "object"
+  },
+  "alchemy_get_token_prices": {
+    "description": "Alchemy token spot prices; requires ``alchemy_api_secret_path`` in Aurey settings.",
+    "properties": {
+      "chain": {
+        "description": "Chain slug (e.g. ethereum, base).",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "token_addresses": {
+        "description": "ERC-20 contract addresses to quote (0x form).",
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1,
+        "title": "Token Addresses",
+        "type": "array"
+      },
+      "wallet_address": {
+        "description": "Wallet address for API context.",
+        "minLength": 1,
+        "title": "Wallet Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "wallet_address",
+      "token_addresses"
+    ],
+    "title": "AlchemyTokenPricesArgs",
+    "type": "object"
+  },
+  "alchemy_get_transfer_history": {
+    "description": "Alchemy transfer history via ``alchemy_getAssetTransfers``; requires ``alchemy_api_secret_path``.",
+    "properties": {
+      "chain": {
+        "description": "Chain slug (e.g. ethereum, base).",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "wallet_address": {
+        "description": "Wallet whose inbound/outbound transfers are listed.",
+        "minLength": 1,
+        "title": "Wallet Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "wallet_address"
+    ],
+    "title": "AlchemyTransferHistoryArgs",
+    "type": "object"
+  },
+  "compute_token_amount_from_usd": {
+    "description": "Map a USD sell notional to ERC-20 raw units (Alchemy price + on-chain ``decimals``).",
+    "properties": {
+      "chain": {
+        "description": "Chain slug where the token and wallet live.",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "token_address": {
+        "description": "Sell token contract (0x).",
+        "minLength": 1,
+        "title": "Token Address",
+        "type": "string"
+      },
+      "usd_notional": {
+        "description": "USD notional as decimal text (e.g. \"5\" or \"12.34\").",
+        "minLength": 1,
+        "title": "Usd Notional",
+        "type": "string"
+      },
+      "wallet_address": {
+        "description": "Wallet for price API context and optional balance check.",
+        "minLength": 1,
+        "title": "Wallet Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "wallet_address",
+      "token_address",
+      "usd_notional"
+    ],
+    "title": "ComputeTokenAmountFromUsdArgs",
+    "type": "object"
+  },
+  "earn_get_vault": {
+    "additionalProperties": false,
+    "description": "Fetch one Earn vault by chain + contract; use before ``earn_prepare_deposit`` to validate metadata.",
+    "properties": {
+      "chain": {
+        "anyOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Chain slug for the vault.",
+        "title": "Chain"
+      },
+      "chain_id": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Numeric chain id for the vault.",
+        "title": "Chain Id"
+      },
+      "vault_address": {
+        "description": "Vault (vault share) contract address (0x).",
+        "minLength": 1,
+        "title": "Vault Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "vault_address"
+    ],
+    "title": "EarnGetVaultArgs",
+    "type": "object"
+  },
+  "earn_list_chains": {
+    "additionalProperties": false,
+    "description": "Discover LiFi Earn-supported chains (vault discovery); optional LiFi key via ``lifi_api_secret_path``.",
+    "properties": {},
+    "title": "EarnListChainsArgs",
+    "type": "object"
+  },
+  "earn_list_protocols": {
+    "additionalProperties": false,
+    "description": "List yield protocols exposed by LiFi Earn; use before filtering vaults.",
+    "properties": {},
+    "title": "EarnListProtocolsArgs",
+    "type": "object"
+  },
+  "earn_list_vaults": {
+    "additionalProperties": false,
+    "description": "Paginated vault search on Earn (`https://earn.li.fi`); filter to Composer-capable vaults by default.",
+    "properties": {
+      "asset": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Underlying asset filter: token address (0x) or symbol as accepted by Earn.",
+        "title": "Asset"
+      },
+      "chain": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Chain slug (e.g. base, ethereum); optional global filter.",
+        "title": "Chain"
+      },
+      "chain_id": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "EVM chain id; optional alternative to ``chain``.",
+        "title": "Chain Id"
+      },
+      "cursor": {
+        "anyOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Opaque pagination cursor from prior response.",
+        "title": "Cursor"
+      },
+      "is_composer_supported": {
+        "default": true,
+        "description": "When true (default), only vaults that support LiFi Composer routes are returned.",
+        "title": "Is Composer Supported",
+        "type": "boolean"
+      },
+      "is_redeemable": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Restrict to redeemable vaults.",
+        "title": "Is Redeemable"
+      },
+      "is_transactional": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Restrict to vaults that allow on-chain deposits.",
+        "title": "Is Transactional"
+      },
+      "limit": {
+        "default": 10,
+        "description": "Page size (max 100).",
+        "maximum": 100,
+        "minimum": 1,
+        "title": "Limit",
+        "type": "integer"
+      },
+      "min_tvl_usd": {
+        "anyOf": [
+          {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Minimum vault TVL in USD.",
+        "title": "Min Tvl Usd"
+      },
+      "protocol": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Protocol id from ``earn_list_protocols``.",
+        "title": "Protocol"
+      },
+      "sort_by": {
+        "anyOf": [
+          {
+            "enum": [
+              "apy",
+              "tvl"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Server-side sort key.",
+        "title": "Sort By"
+      }
+    },
+    "title": "EarnListVaultsArgs",
+    "type": "object"
+  },
+  "earn_portfolio_positions": {
+    "description": "LiFi Earn portfolio positions for a wallet across supported chains.",
+    "properties": {
+      "wallet_address": {
+        "description": "Wallet to list Earn positions for (0x).",
+        "minLength": 1,
+        "title": "Wallet Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "wallet_address"
+    ],
+    "title": "EarnPortfolioPositionsArgs",
+    "type": "object"
+  },
+  "earn_prepare_deposit": {
+    "additionalProperties": false,
+    "description": "Prepare a LiFi Composer quote that deposits into an Earn vault (``toToken`` = vault share token).",
+    "properties": {
+      "from_address": {
+        "description": "Sender; must sign the prepared tx on ``from_chain``.",
+        "minLength": 1,
+        "title": "From Address",
+        "type": "string"
+      },
+      "from_amount_wei": {
+        "description": "Sell amount in smallest token units (decimal string of digits, same as ``swap_prepare``).",
+        "minLength": 1,
+        "pattern": "^[0-9]+$",
+        "title": "From Amount Wei",
+        "type": "string"
+      },
+      "from_asset": {
+        "description": "Sell token on ``from_chain`` (0x address or symbol accepted by LiFi ``fromToken``).",
+        "minLength": 1,
+        "title": "From Asset",
+        "type": "string"
+      },
+      "from_chain": {
+        "description": "Source chain slug where ``from_asset`` is spent.",
+        "minLength": 1,
+        "title": "From Chain",
+        "type": "string"
+      },
+      "order": {
+        "anyOf": [
+          {
+            "enum": [
+              "FASTEST",
+              "CHEAPEST"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "LiFi route preference for the Composer deposit leg.",
+        "title": "Order"
+      },
+      "slippage": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Max slippage as decimal fraction (e.g. 0.005 = 0.5%%).",
+        "title": "Slippage"
+      },
+      "to_address": {
+        "anyOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Recipient of vault shares on the vault chain; defaults to ``from_address``.",
+        "title": "To Address"
+      },
+      "vault_address": {
+        "description": "Vault contract on the vault chain (0x).",
+        "minLength": 1,
+        "title": "Vault Address",
+        "type": "string"
+      },
+      "vault_chain": {
+        "anyOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Chain slug where the vault lives.",
+        "title": "Vault Chain"
+      },
+      "vault_chain_id": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Numeric chain id of the vault.",
+        "title": "Vault Chain Id"
+      }
+    },
+    "required": [
+      "vault_address",
+      "from_chain",
+      "from_asset",
+      "from_amount_wei",
+      "from_address"
+    ],
+    "title": "EarnPrepareDepositArgs",
+    "type": "object"
+  },
+  "evm_get_erc20_balance": {
+    "description": "ERC-20 ``balanceOf`` via JSON-RPC; requires ``alchemy_api_secret_path`` for RPC.",
+    "properties": {
+      "chain": {
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "token_address": {
+        "description": "ERC-20 contract (0x).",
+        "minLength": 1,
+        "title": "Token Address",
+        "type": "string"
+      },
+      "wallet_address": {
+        "minLength": 1,
+        "title": "Wallet Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "wallet_address",
+      "token_address"
+    ],
+    "title": "EvmGetErc20BalanceArgs",
+    "type": "object"
+  },
+  "evm_get_erc20_decimals": {
+    "description": "Read token ``decimals()``; uses RPC from Alchemy-backed URL when configured.",
+    "properties": {
+      "chain": {
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "token_address": {
+        "minLength": 1,
+        "title": "Token Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "token_address"
+    ],
+    "title": "EvmGetErc20DecimalsArgs",
+    "type": "object"
+  },
+  "evm_get_native_balance": {
+    "description": "Native balance via JSON-RPC; requires ``alchemy_api_secret_path`` for RPC URL derivation.",
+    "properties": {
+      "chain": {
+        "description": "Chain slug (e.g. ethereum, base).",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "wallet_address": {
+        "description": "Address to read balance for.",
+        "minLength": 1,
+        "title": "Wallet Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "wallet_address"
+    ],
+    "title": "EvmGetNativeBalanceArgs",
+    "type": "object"
+  },
+  "evm_resolve_ens": {
+    "description": "Resolve ENS on Ethereum L1; uses RPC from settings-backed resolution path.",
+    "properties": {
+      "chain": {
+        "default": "ethereum",
+        "description": "Must be 'ethereum'. ENS forward resolution is only defined on L1 mainnet.",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "name": {
+        "description": "ENS name such as nick.eth (trimmed and lower-cased by the tool).",
+        "minLength": 1,
+        "title": "Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "title": "EvmResolveEnsArgs",
+    "type": "object"
+  },
+  "lifi_get_status": {
+    "description": "``GET /v1/status`` on ``runtime.lifi_base_url``; optional ``x-lifi-api-key`` from settings.",
+    "properties": {
+      "bridge": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Bridging tool id (LiFi tools enum).",
+        "title": "Bridge"
+      },
+      "from_chain": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Source chain slug (Aurey registry).",
+        "title": "From Chain"
+      },
+      "from_chain_id": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Numeric sending chain id.",
+        "title": "From Chain Id"
+      },
+      "to_chain": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Destination chain slug (Aurey registry).",
+        "title": "To Chain"
+      },
+      "to_chain_id": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Numeric destination chain id.",
+        "title": "To Chain Id"
+      },
+      "tx_hash": {
+        "description": "Sending-chain tx hash, destination tx hash, or LiFi step id.",
+        "minLength": 1,
+        "title": "Tx Hash",
+        "type": "string"
+      }
+    },
+    "required": [
+      "tx_hash"
+    ],
+    "title": "LiFiStatusInput",
+    "type": "object"
+  },
+  "request_user_input": {
+    "$defs": {
+      "UserQuestion": {
+        "description": "Single follow-up question for the user or host UI.",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "prompt": {
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "UserQuestion",
+        "type": "object"
+      }
+    },
+    "properties": {
+      "questions": {
+        "description": "Host-visible follow-up questions for missing wallet-operation fields (never for secrets or unrelated PII).",
+        "items": {
+          "$ref": "#/$defs/UserQuestion"
+        },
+        "minItems": 1,
+        "title": "Questions",
+        "type": "array"
+      }
+    },
+    "required": [
+      "questions"
+    ],
+    "title": "RequestUserInputArgs",
+    "type": "object"
+  },
+  "resolve_known_address": {
+    "description": "Map a known ticker to a contract address (bundled mapping; no Alchemy call).",
+    "properties": {
+      "chain": {
+        "description": "Chain slug.",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "known_ticker": {
+        "description": "Ticker key, e.g. usdc, weth.",
+        "minLength": 1,
+        "title": "Known Ticker",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "known_ticker"
+    ],
+    "title": "ResolveKnownAddressArgs",
+    "type": "object"
+  },
+  "swap_prepare": {
+    "description": "LiFi swap quote (``GET /v1/quote``); optional authenticated LiFi when ``lifi_api_secret_path`` is set in Aurey settings.",
+    "properties": {
+      "from_address": {
+        "minLength": 1,
+        "title": "From Address",
+        "type": "string"
+      },
+      "from_amount_wei": {
+        "minLength": 1,
+        "pattern": "^[0-9]+$",
+        "title": "From Amount Wei",
+        "type": "string"
+      },
+      "from_asset": {
+        "description": "Token contract (0x\u2026) or symbol as accepted by LiFi ``fromToken``. Phrases like \u00abnative ETH\u00bb map to wrapped native on that chain.",
+        "minLength": 1,
+        "title": "From Asset",
+        "type": "string"
+      },
+      "from_chain": {
+        "description": "Source chain slug.",
+        "minLength": 1,
+        "title": "From Chain",
+        "type": "string"
+      },
+      "order": {
+        "anyOf": [
+          {
+            "enum": [
+              "FASTEST",
+              "CHEAPEST"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "LiFi route preference; omit for LiFi default sorting.",
+        "title": "Order"
+      },
+      "slippage": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Max slippage as decimal (e.g. 0.005 = 0.5%%). Omit for LiFi default.",
+        "title": "Slippage"
+      },
+      "to_address": {
+        "minLength": 1,
+        "title": "To Address",
+        "type": "string"
+      },
+      "to_asset": {
+        "description": "Token contract (0x\u2026) or symbol as accepted by LiFi ``toToken``. Phrases like \u00abnative ETH\u00bb on the **to_chain** are rewritten to that chain's wrapped native (e.g. Base WETH) because LiFi requires an ERC-20 ``toToken``.",
+        "minLength": 1,
+        "title": "To Asset",
+        "type": "string"
+      },
+      "to_chain": {
+        "description": "Destination chain slug.",
+        "minLength": 1,
+        "title": "To Chain",
+        "type": "string"
+      }
+    },
+    "required": [
+      "from_chain",
+      "to_chain",
+      "from_asset",
+      "to_asset",
+      "from_amount_wei",
+      "from_address",
+      "to_address"
+    ],
+    "title": "SwapPrepareInput",
+    "type": "object"
+  },
+  "tx_execute": {
+    "description": "Execute a prepared tx: simulate, policy, sign via 1Claw, broadcast.",
+    "properties": {
+      "envelope": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Required. The exact `envelope` object from a successful `tx_prepare_*` or `tx_prepare_lifi_swap` call: `prepare_output['result']['envelope']`. You cannot call this tool with only `idempotency_key`.",
+        "title": "Envelope"
+      },
+      "idempotency_key": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Optional idempotency key for broadcast (never pass without `envelope`).",
+        "title": "Idempotency Key"
+      },
+      "prepared_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Preferred for LiFi swaps: short server-side prepared transaction id returned by `swap_prepare`, `earn_prepare_deposit`, or `tx_prepare_lifi_swap`. Avoids sending large calldata through the model.",
+        "title": "Prepared Id"
+      }
+    },
+    "title": "TxExecuteToolArgs",
+    "type": "object"
+  },
+  "tx_prepare_erc20_approval": {
+    "description": "Prepare ERC-20 ``approve`` for DEX/spenders (e.g. before LiFi swaps).",
+    "properties": {
+      "amount_wei": {
+        "description": "Token amount in the contract's smallest units (not necessarily 1e18). Lookup token decimals: USDC on Base/Ethereum uses **6** \u2014 e.g. 0.01 USDC = **10_000**, 1 USDC = **1_000_000**. WETH uses 18. Do not scale USDC by 10**18.",
+        "minimum": 0,
+        "title": "Amount Wei",
+        "type": "integer"
+      },
+      "chain": {
+        "description": "Chain slug.",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "from_address": {
+        "minLength": 1,
+        "title": "From Address",
+        "type": "string"
+      },
+      "spender_address": {
+        "description": "Spender contract (e.g. router).",
+        "minLength": 1,
+        "title": "Spender Address",
+        "type": "string"
+      },
+      "token_address": {
+        "minLength": 1,
+        "title": "Token Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "from_address",
+      "token_address",
+      "spender_address",
+      "amount_wei"
+    ],
+    "title": "TxPrepareErc20ApprovalArgs",
+    "type": "object"
+  },
+  "tx_prepare_erc20_transfer": {
+    "description": "Prepare ERC-20 transfer; RPC from Alchemy path if configured.",
+    "properties": {
+      "amount_wei": {
+        "description": "Token amount in the contract's smallest units (not necessarily 1e18). Lookup token decimals: USDC on Base/Ethereum uses **6** \u2014 e.g. 0.01 USDC = **10_000**, 1 USDC = **1_000_000**. WETH uses 18. Do not scale USDC by 10**18.",
+        "minimum": 0,
+        "title": "Amount Wei",
+        "type": "integer"
+      },
+      "chain": {
+        "description": "Chain slug.",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "from_address": {
+        "minLength": 1,
+        "title": "From Address",
+        "type": "string"
+      },
+      "to_address": {
+        "minLength": 1,
+        "title": "To Address",
+        "type": "string"
+      },
+      "token_address": {
+        "description": "ERC-20 contract (0x).",
+        "minLength": 1,
+        "title": "Token Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "from_address",
+      "token_address",
+      "to_address",
+      "amount_wei"
+    ],
+    "title": "TxPrepareErc20TransferArgs",
+    "type": "object"
+  },
+  "tx_prepare_lifi_swap": {
+    "$defs": {
+      "LiFiAllowanceContext": {
+        "description": "On-chain allowance snapshot for the LiFi route's sell token and approval spender.\n\nAlways populated when LiFi returns an ERC-20 ``fromToken`` and ``approvalAddress``, even if\n``allowance`` is omitted because the wallet already had enough allowance at prepare time.",
+        "properties": {
+          "allowance_sufficient": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "True iff ``current_allowance_raw`` was read and is >= ``amount_raw``.",
+            "title": "Allowance Sufficient"
+          },
+          "amount_raw": {
+            "description": "LiFi route sell amount in raw units (same as ``allowance.amount_raw`` when set).",
+            "pattern": "^[0-9]+$",
+            "title": "Amount Raw",
+            "type": "string"
+          },
+          "current_allowance_raw": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "``allowance(owner, spender)`` at prepare time when Alchemy read succeeded.",
+            "title": "Current Allowance Raw"
+          },
+          "spender_address": {
+            "title": "Spender Address",
+            "type": "string"
+          },
+          "token_address": {
+            "title": "Token Address",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token_address",
+          "spender_address",
+          "amount_raw"
+        ],
+        "title": "LiFiAllowanceContext",
+        "type": "object"
+      }
+    },
+    "description": "Build executable swap wiring from ``swap_prepare``; prefers ``prepared_id`` so calldata stays server-side (1Claw signing after prepare).",
+    "properties": {
+      "allowance_context": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LiFiAllowanceContext"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Optional: ERC-20 allowance context from ``swap_prepare`` / ``earn_prepare_deposit`` (pass through verbatim)."
+      },
+      "chain": {
+        "description": "Chain slug for the LiFi step.",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "from_address": {
+        "description": "EOA that will send the swap tx (0x).",
+        "minLength": 1,
+        "title": "From Address",
+        "type": "string"
+      },
+      "prepared": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Preferred: exact `prepared` from `swap_prepare` (`route_id` + `transaction_request`).",
+        "title": "Prepared"
+      },
+      "prepared_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Server-side prepared id returned by swap_prepare; preferred because it avoids sending large LiFi calldata through the model.",
+        "title": "Prepared Id"
+      },
+      "route_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Alternative when `prepared` is awkward for the caller: LiFi step id string.",
+        "title": "Route Id"
+      },
+      "transaction_request": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "LiFi transactionRequest dict; pair with `route_id` if no `prepared`.",
+        "title": "Transaction Request"
+      }
+    },
+    "required": [
+      "chain",
+      "from_address"
+    ],
+    "title": "TxPrepareLiFiInput",
+    "type": "object"
+  },
+  "tx_prepare_native_transfer": {
+    "description": "Prepare native (ETH/Base ETH) transfer; signing uses wallet path from settings.",
+    "properties": {
+      "chain": {
+        "description": "Chain slug (e.g. ethereum, base).",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "from_address": {
+        "description": "Sender EVM address (0x).",
+        "minLength": 1,
+        "title": "From Address",
+        "type": "string"
+      },
+      "to_address": {
+        "description": "Recipient EVM address (0x).",
+        "minLength": 1,
+        "title": "To Address",
+        "type": "string"
+      },
+      "value_wei": {
+        "description": "Native amount in wei.",
+        "minimum": 0,
+        "title": "Value Wei",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "chain",
+      "from_address",
+      "to_address",
+      "value_wei"
+    ],
+    "title": "TxPrepareNativeArgs",
+    "type": "object"
+  }
+}
