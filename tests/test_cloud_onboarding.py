@@ -17,7 +17,7 @@ from aurey.cloud.onboarding.grant_repository import SqlGrantReferenceRepository
 from aurey.cloud.onboarding.state_machine import assert_transition_allowed, coerce_phase_value
 from aurey.cloud.platform import OneClawPlatformApiClient
 from aurey.settings import AureySettings
-from tests.fakes.http_client import ScriptedHttpClient, FailingHttpJsonClient
+from tests.fakes.http_client import FailingHttpJsonClient, ScriptedHttpClient
 
 
 def _rsa_pem() -> str:
@@ -35,7 +35,15 @@ def _engine() -> object:
     return eng
 
 
-def _make_svc(*, http: ScriptedHttpClient, eng: object | None = None) -> OnboardingService:
+def _make_svc(
+    *,
+    http: ScriptedHttpClient,
+    eng: object | None = None,
+    hosted_grant_path_template: str | None = None,
+) -> OnboardingService:
+    extra: dict[str, str] = {}
+    if hosted_grant_path_template is not None:
+        extra["hosted_user_grant_secret_path_template"] = hosted_grant_path_template
     settings = AureySettings(
         database_url="sqlite:///:memory:",
         plt_app_id="app_9",
@@ -43,6 +51,7 @@ def _make_svc(*, http: ScriptedHttpClient, eng: object | None = None) -> Onboard
         plt_app_api_key_secret_source="AUREY_PLT_KEY",
         oidc_issuer="https://issuer.example",
         oidc_rsa_private_key_pem_secret_source="AUREY_OIDC_PEM",
+        **extra,
     )
     oidc = OidcSubjectTokenSigner.from_pem(
         settings.resolve_oidc_rsa_private_key_pem_optional() or "",
@@ -177,7 +186,9 @@ def test_state_machine_allows_expected_edges() -> None:
 
 def test_state_machine_rejects_skip_and_ready_regression() -> None:
     with pytest.raises(InvalidOnboardingTransition):
-        assert_transition_allowed(from_phase=OnboardingPhase.PENDING, to_phase=OnboardingPhase.READY)
+        assert_transition_allowed(
+            from_phase=OnboardingPhase.PENDING, to_phase=OnboardingPhase.READY
+        )
     with pytest.raises(InvalidOnboardingTransition):
         assert_transition_allowed(
             from_phase=OnboardingPhase.READY, to_phase=OnboardingPhase.AWAITING_CLAIM
@@ -234,6 +245,50 @@ def test_poll_claim_marks_ready_and_sets_grant_placeholder(monkeypatch) -> None:
         ).all()
         types = {e.event_type for e in events}
         assert "claim_detected" in types
+    finally:
+        session.close()
+
+
+def test_poll_claim_uses_configured_grant_secret_path_template(monkeypatch) -> None:
+    monkeypatch.setenv("AUREY_PLT_KEY", "plt_secret")
+    monkeypatch.setenv("AUREY_OIDC_PEM", _rsa_pem())
+
+    http = ScriptedHttpClient(
+        [
+            (
+                lambda method, url, headers, json_body: "users/upsert" in url,
+                {"connection_id": "conn_tpl", "id": "usr_tpl"},
+            ),
+            (
+                lambda method, url, headers, json_body: "bootstrap" in url,
+                {
+                    "claim_url": "https://claim.example/tpl",
+                    "vault_id": "vlt_tpl",
+                    "agent_id": "agt_tpl",
+                },
+            ),
+            (
+                lambda method, url, headers, json_body: method == "GET"
+                and url.endswith("/v1/platform/connections/conn_tpl"),
+                {"claimed": True},
+            ),
+        ]
+    )
+    svc = _make_svc(
+        http=http,
+        hosted_grant_path_template="aurey/hosted/grants/{connection_id}/agent-{agent_id}",
+    )
+    svc.run_telegram_start(telegram_user_id=881, display_name=None)
+    assert svc.poll_awaiting_claims() == 1
+
+    session = svc._session_factory()
+    try:
+        row = session.scalars(
+            select(PlatformUser).where(PlatformUser.telegram_user_id == 881)
+        ).one()
+        assert (
+            row.grant_ref_path == "aurey/hosted/grants/conn_tpl/agent-agt_tpl"
+        )
     finally:
         session.close()
 

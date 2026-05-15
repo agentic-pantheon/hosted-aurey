@@ -183,6 +183,16 @@ class AureySettings(BaseSettings):
             "and grant JWT material readable from ``grant_ref_path`` in the operator vault."
         ),
     )
+    hosted_user_grant_secret_path_template: str | None = Field(
+        default=None,
+        description=(
+            "Template for the operator-vault secret path holding each hosted user's grant JWT "
+            "(subject token for delegated exchange). Substitutions: ``{vault_id}``, "
+            "``{connection_id}``, ``{agent_id}`` from the platform user row. When unset, Aurey "
+            "falls back to a synthetic locator string (not a real vault path). Operators should "
+            "set this to a path they populate after claim."
+        ),
+    )
 
     alchemy_api_secret_path: str | None = Field(
         default=None,
@@ -284,6 +294,14 @@ class AureySettings(BaseSettings):
             raise ValueError("ocv_agent_api_key_secret_source must not be empty.")
         return stripped
 
+    @field_validator("hosted_user_grant_secret_path_template")
+    @classmethod
+    def _hosted_user_grant_secret_path_template_optional(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped or None
+
     @property
     def telegram_allowed_chat_id_allowlist(self) -> frozenset[int] | None:
         """Frozen set of allowed chat ids, or ``None`` when the bot accepts any chat."""
@@ -316,6 +334,27 @@ class AureySettings(BaseSettings):
         if name is None:
             return None
         return _read_trimmed_nonempty_env(name)
+
+    def format_hosted_user_grant_secret_path(
+        self,
+        *,
+        vault_id: str | None,
+        connection_id: str,
+        agent_id: str | None,
+    ) -> str:
+        """Expand :attr:`hosted_user_grant_secret_path_template` or return empty string."""
+
+        tpl = (self.hosted_user_grant_secret_path_template or "").strip()
+        if not tpl:
+            return ""
+        vid = (vault_id or "").strip() or "unknown_vault"
+        cid = (connection_id or "").strip()
+        aid = (agent_id or "").strip()
+        return (
+            tpl.replace("{vault_id}", vid)
+            .replace("{connection_id}", cid)
+            .replace("{agent_id}", aid)
+        )
 
     def cloud_onboarding_configured(self) -> bool:
         """True when Telegram ``/start`` onboarding + JWKS plumbing should activate."""

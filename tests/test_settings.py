@@ -36,6 +36,7 @@ def test_settings_defaults():
     assert s.ocv_agent_token_expiry_skew_seconds == 60.0
     assert s.oneclaw_delegated_token_scope == "intents:sign"
     assert s.cloud_hosted_intents_signing_enabled is False
+    assert s.hosted_user_grant_secret_path_template is None
 
 
 def test_settings_env_override(monkeypatch):

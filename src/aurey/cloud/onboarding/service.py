@@ -42,19 +42,6 @@ def _bootstrap_idempotency_key(*, connection_id: str, template_id: str) -> str:
     return f"{template_id}:{connection_id}"
 
 
-def _build_grant_ref_path(*, vault_id: str | None, connection_id: str, agent_id: str | None) -> str:
-    """Synthetic vault-oriented locator; Phase D may map this to a real SecretStore path.
-
-    Intentionally avoids embedding any grant secrets — IDs only.
-    """
-
-    vault = (vault_id or "").strip() or "unknown_vault"
-    cid = (connection_id or "").strip()
-    aid = (agent_id or "").strip()
-    base = f"vaults/{vault}/delegated_grants/connections/{cid}"
-    return f"{base}/agent/{aid}" if aid else base
-
-
 class OnboardingService:
     """Coordinates DB state with platform upsert/bootstrap and claim polling (Phase B–C)."""
 
@@ -72,6 +59,32 @@ class OnboardingService:
         self._platform = platform
         self._oidc = oidc
         self._grants = grant_repository
+
+    def _grant_ref_path_for_user(
+        self,
+        *,
+        vault_id: str | None,
+        connection_id: str,
+        agent_id: str | None,
+    ) -> str:
+        """Resolvable operator-vault locator for delegated grant JWT material.
+
+        Prefer :attr:`~aurey.settings.AureySettings.hosted_user_grant_secret_path_template`
+        when set; otherwise a synthetic ID-only path (unlikely to exist in vault).
+        """
+
+        custom = self._settings.format_hosted_user_grant_secret_path(
+            vault_id=vault_id,
+            connection_id=connection_id,
+            agent_id=agent_id,
+        )
+        if custom.strip():
+            return custom.strip()
+        vault = (vault_id or "").strip() or "unknown_vault"
+        cid = (connection_id or "").strip()
+        aid = (agent_id or "").strip()
+        base = f"vaults/{vault}/delegated_grants/connections/{cid}"
+        return f"{base}/agent/{aid}" if aid else base
 
     def run_telegram_start(
         self,
@@ -224,7 +237,7 @@ class OnboardingService:
                     session.commit()
                     continue
 
-                grant_path = _build_grant_ref_path(
+                grant_path = self._grant_ref_path_for_user(
                     vault_id=user.vault_id,
                     connection_id=cid,
                     agent_id=user.agent_id,

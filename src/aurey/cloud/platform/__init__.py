@@ -137,8 +137,14 @@ class OneClawPlatformApiClient:
     def get_connection(self, *, connection_id: str) -> dict[str, Any]:
         """Fetch connection details for claim polling (Phase C).
 
-        **Assumption:** ``GET /v1/platform/connections/{connection_id}`` exists and returns a
-        JSON object eventually consumed by
+        **Note:** As of verification against ``https://api.1claw.xyz/openapi.json``, there is **no**
+        published ``plt_`` endpoint for ``GET /v1/platform/connections/{connection_id}`` — only
+        ``POST …/bootstrap`` appears under ``/v1/platform/connections``. This helper therefore
+        calls that candidate path anyway (some deployments may expose it ahead of schema updates);
+        if polling returns persistent 404s, rely on webhook or another reconciliation channel until
+        1Claw documents the read API.
+
+        The JSON object should be shaped for
         :func:`aurey.cloud.onboarding.claim_parser.parse_claim_ready_signal`.
         """
 
