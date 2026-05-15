@@ -159,6 +159,26 @@ def runtime_wiring_context_for_deep_agent_prompt(settings: AureySettings) -> str
     return "\n\n" + "\n".join(lines)
 
 
+def hosted_wallet_prompt_segment(wallet_address: str | None) -> str:
+    """Wallet hint for hosted users (via ``extra_system_prompt``); avoids global env defaults."""
+
+    raw = (wallet_address or "").strip()
+    if not raw:
+        return ""
+    try:
+        addr = normalize_evm_address(raw)
+    except ValueError:
+        _log.warning(
+            "Ignoring invalid hosted wallet_address for deep agent prompt (expected 0x EVM address).",
+        )
+        return ""
+    return (
+        "\n\nHosted user context: primary EVM wallet is "
+        f"{addr}. Use it when the user says \"my wallet\" or omits wallet / "
+        "`from` arguments unless they specify otherwise."
+    )
+
+
 def wallet_context_for_deep_agent_prompt(settings: AureySettings) -> str:
     """Return a suffix for the deep agent system prompt, or an empty string if unset or invalid."""
 
@@ -235,6 +255,7 @@ def create_aurey_deep_agent(
 __all__ = [
     "AUREY_DEEP_USER_PROMPT",
     "create_aurey_deep_agent",
+    "hosted_wallet_prompt_segment",
     "runtime_wiring_context_for_deep_agent_prompt",
     "wallet_context_for_deep_agent_prompt",
 ]

@@ -121,12 +121,19 @@ def _execute_node(runtime: AureyRuntime, state: TxExecuteGraphState) -> TxExecut
 
         return {"result": outcome.model_dump()}
 
-    agent_id = runtime.settings.ocv_agent_id
+    principal = runtime.principal
+    if principal is not None:
+        agent_id = principal.user_agent_id
+    else:
+        agent_id = runtime.settings.ocv_agent_id
     if agent_id is None or not str(agent_id).strip():
         return {
             "error": GraphErrorBody(
                 code="secret_not_configured",
-                message="ocv_agent_id must be configured for oneclaw_intents execution.",
+                message=(
+                    "Signing agent id missing for oneclaw_intents execution "
+                    "(configure `ocv_agent_id` or invoke with a hosted user principal)."
+                ),
                 details=None,
             ).model_dump()
         }

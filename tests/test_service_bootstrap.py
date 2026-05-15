@@ -65,6 +65,7 @@ def test_bootstrap_oneclaw_evm_signer_is_same_as_secret_store_client(monkeypatch
     state = bootstrap_aurey_service_state(s)
     assert len(clients) == 1
     assert state.runtime.oneclaw_evm_signer is clients[0]
+    assert state.runtime.oneclaw_operator_http is clients[0]
 
 
 def test_bootstrap_uses_postgres_when_database_url(monkeypatch):

@@ -51,6 +51,7 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
         http=UrllibHttpJsonClient(),
         tx_pipeline=Web3TxPipeline(settings=s, secret_store=store),
         oneclaw_evm_signer=client,
+        oneclaw_operator_http=client,
     )
 
     default_model = (s.deep_agent_default_model or "").strip() or "openai:gpt-4o-mini"

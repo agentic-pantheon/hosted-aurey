@@ -286,6 +286,61 @@ def test_poll_claim_http_failure_is_tolerant(monkeypatch) -> None:
         session.close()
 
 
+def test_user_principal_for_ready_user(monkeypatch) -> None:
+    monkeypatch.setenv("AUREY_PLT_KEY", "plt_secret")
+    monkeypatch.setenv("AUREY_OIDC_PEM", _rsa_pem())
+
+    http = ScriptedHttpClient(
+        [
+            (
+                lambda method, url, headers, json_body: "users/upsert" in url,
+                {"connection_id": "conn_princ", "id": "usr_princ"},
+            ),
+            (
+                lambda method, url, headers, json_body: "bootstrap" in url,
+                {
+                    "claim_url": "https://claim.example/pr",
+                    "vault_id": "vlt_pr",
+                    "agent_id": "agt_pr",
+                },
+            ),
+            (
+                lambda method, url, headers, json_body: method == "GET"
+                and url.endswith("/v1/platform/connections/conn_princ"),
+                {"claimed": True},
+            ),
+        ]
+    )
+    svc = _make_svc(http=http)
+    assert svc.run_telegram_start(telegram_user_id=5001, display_name=None).kind == "claim"
+    assert svc.poll_awaiting_claims() == 1
+    pr = svc.user_principal_for_telegram_user(5001)
+    assert pr is not None
+    assert pr.user_agent_id == "agt_pr"
+    assert pr.grant_ref_path.startswith("vaults/vlt_pr/delegated_grants/connections/conn_princ")
+
+
+def test_user_principal_none_before_claim(monkeypatch) -> None:
+    monkeypatch.setenv("AUREY_PLT_KEY", "plt_secret")
+    monkeypatch.setenv("AUREY_OIDC_PEM", _rsa_pem())
+
+    http = ScriptedHttpClient(
+        [
+            (
+                lambda method, url, headers, json_body: "users/upsert" in url,
+                {"connection_id": "conn_early", "id": "usr_early"},
+            ),
+            (
+                lambda method, url, headers, json_body: "bootstrap" in url,
+                {"claim_url": "https://claim.example/e", "vault_id": "v1", "agent_id": "a1"},
+            ),
+        ]
+    )
+    svc = _make_svc(http=http)
+    svc.run_telegram_start(telegram_user_id=6002, display_name=None)
+    assert svc.user_principal_for_telegram_user(6002) is None
+
+
 def test_coerce_phase_value_defaults_unknown() -> None:
     assert coerce_phase_value(None) == OnboardingPhase.PENDING
     assert coerce_phase_value("nope") == OnboardingPhase.PENDING

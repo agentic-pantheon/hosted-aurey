@@ -13,6 +13,7 @@ import pytest
 
 from aurey.custody import (
     FakeOneClawClient,
+    FakeSecretStore,
     OneClawHttpClient,
     OneClawSigningError,
     OneClawSignTransactionResult,
@@ -314,3 +315,85 @@ def test_oneclaw_http_get_secret_refetches_token_after_expires_in_window():
     assert auth1 == "Bearer jwt-old"
     assert auth3 == "Bearer jwt-new"
     assert mono.call_count == 3
+
+
+def test_oneclaw_http_delegated_sign_reuses_cached_token(monkeypatch):
+    captured: list[Request] = []
+    actions = [
+        json.dumps({"access_token": "jwt-del", "expires_in": 3600}).encode(),
+        json.dumps({"signed_tx": "0xsig1"}).encode(),
+        json.dumps({"signed_tx": "0xsig2"}).encode(),
+    ]
+    mono = MagicMock(side_effect=[1000.0, 1001.0, 1002.0])
+    with (
+        patch(
+            "aurey.custody.secret_store.urlopen",
+            side_effect=_make_urlopen_mock(actions, captured),
+        ),
+        patch("aurey.custody.secret_store.time.monotonic", mono),
+    ):
+        client = OneClawHttpClient(
+            base_url="https://claw.test",
+            api_key="ocv_actor",
+            agent_token_expiry_skew_seconds=60.0,
+        )
+        tx = dict(_MIN_WEB3_EIP1559_TX)
+        r1 = client.sign_evm_transaction(
+            agent_id="ag_u",
+            chain="base",
+            transaction=tx,
+            delegated_subject_token="grantSUBJECT",
+            delegated_scope="intents:sign",
+        )
+        r2 = client.sign_evm_transaction(
+            agent_id="ag_u",
+            chain="base",
+            transaction=tx,
+            delegated_subject_token="grantSUBJECT",
+            delegated_scope="intents:sign",
+        )
+    assert r1.signed_tx == "0xsig1"
+    assert r2.signed_tx == "0xsig2"
+    assert len(captured) == 3
+    body0 = json.loads(captured[0].data.decode())
+    assert body0["scope"] == "intents:sign"
+    assert body0["actor_token"] == "ocv_actor"
+    assert body0["subject_token"] == "grantSUBJECT"
+    delegated_posts = [
+        r for r in captured if r.method == "POST" and "/delegated-token" in r.full_url
+    ]
+    assert len(delegated_posts) == 1
+
+
+def test_principal_backed_signer_loads_grant_and_calls_http(monkeypatch):
+    from aurey.custody.delegated_signer import PrincipalBackedOneClawSigner
+    from aurey.principal import UserPrincipal
+
+    captured: list[Request] = []
+    actions = [
+        json.dumps({"access_token": "jwt-del", "expires_in": 3600}).encode(),
+        json.dumps({"signed_tx": "0xsigned"}).encode(),
+    ]
+    with patch(
+        "aurey.custody.secret_store.urlopen",
+        side_effect=_make_urlopen_mock(actions, captured),
+    ):
+        http = OneClawHttpClient(base_url="https://claw.test", api_key="actor_k")
+        store = FakeSecretStore({"vault/grants/u1": "grant-body"})
+        principal = UserPrincipal(
+            db_user_id="11111111-1111-1111-1111-111111111111",
+            user_agent_id="ag_hosted",
+            grant_ref_path="vault/grants/u1",
+        )
+        signer = PrincipalBackedOneClawSigner(
+            http=http,
+            secret_store=store,
+            principal=principal,
+            delegated_scope="intents:sign",
+        )
+        tx = dict(_MIN_WEB3_EIP1559_TX)
+        result = signer.sign_evm_transaction(agent_id="ag_hosted", chain="base", transaction=tx)
+    assert result.signed_tx == "0xsigned"
+    assert json.loads(captured[0].data.decode())["subject_token"] == "grant-body"
+
+

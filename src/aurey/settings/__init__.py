@@ -160,6 +160,13 @@ class AureySettings(BaseSettings):
             "when expiry is known)."
         ),
     )
+    oneclaw_delegated_token_scope: str = Field(
+        default="intents:sign",
+        description=(
+            "Scope string sent to ``POST /v1/auth/delegated-token`` when signing as a hosted "
+            "user agent (exact value defined by 1Claw for intents/unified sign)."
+        ),
+    )
 
     alchemy_api_secret_path: str | None = Field(
         default=None,

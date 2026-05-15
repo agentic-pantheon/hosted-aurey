@@ -90,7 +90,8 @@ class _FakeServiceState:
         self.graph = graph
         self.model: str | None = None
 
-    def get_or_create_graph(self, model: str | None):
+    def get_or_create_graph(self, model: str | None, **kwargs: object):
+        _ = kwargs
         self.model = model
         return self.graph
 

@@ -20,6 +20,7 @@ from aurey.cloud.onboarding.state_machine import (
     coerce_phase_value,
 )
 from aurey.cloud.platform import OneClawPlatformApiClient
+from aurey.principal import UserPrincipal
 from aurey.settings import AureySettings
 
 _LOG = logging.getLogger("aurey.cloud.onboarding")
@@ -131,6 +132,40 @@ class OnboardingService:
                 "Finish wallet setup first: open the claim link from /start, complete the flow in "
                 "your browser, wait a few seconds, then send /start again. I stay quiet until "
                 "that step succeeds."
+            )
+        finally:
+            session.close()
+
+    def user_principal_for_telegram_user(self, telegram_user_id: int) -> UserPrincipal | None:
+        """Return a hosted principal when the Telegram user is ``ready`` with signing metadata."""
+
+        if not self._settings.cloud_onboarding_configured():
+            return None
+
+        session = self._session_factory()
+        try:
+            row = session.execute(
+                select(PlatformUser).where(PlatformUser.telegram_user_id == int(telegram_user_id))
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            if coerce_phase_value(row.onboarding_state) != OnboardingPhase.READY:
+                return None
+            aid = (row.agent_id or "").strip()
+            gpath = (row.grant_ref_path or "").strip()
+            if not aid or not gpath:
+                return None
+            wallet: str | None = None
+            meta = row.grant_metadata if isinstance(row.grant_metadata, dict) else None
+            if meta:
+                w = meta.get("wallet_address") or meta.get("wallet")
+                if isinstance(w, str) and w.strip():
+                    wallet = w.strip()
+            return UserPrincipal(
+                db_user_id=str(row.id),
+                user_agent_id=aid,
+                grant_ref_path=gpath,
+                wallet_address=wallet,
             )
         finally:
             session.close()

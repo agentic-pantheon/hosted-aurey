@@ -11,7 +11,10 @@ from openai import APIConnectionError, APITimeoutError
 from pydantic import BaseModel
 
 from aurey.reasoning import thread_config
+from aurey.reasoning.deep_agent import hosted_wallet_prompt_segment
+from aurey.runtime import AureyRuntime
 from aurey.service.agent_trace import build_agent_trace_handler, format_exception_chain
+from aurey.service.invoke_runtime import push_runtime_overlay, reset_runtime_overlay
 from aurey.service.message_content import (
     flatten_message_content,
     reply_preview_from_summary,
@@ -113,6 +116,9 @@ def invoke_deep_agent_turn(
     context: dict[str, Any] | None = None,
     model: str | None = None,
     extra_callbacks: list[Any] | None = None,
+    runtime_overlay: AureyRuntime | None = None,
+    graph_cache_suffix: str = "",
+    hosted_wallet_address: str | None = None,
 ) -> AgentInvokeResult:
     """Invoke the shared deep-agent graph with sanitized error responses."""
 
@@ -145,10 +151,13 @@ def invoke_deep_agent_turn(
         _kv_line(model=spec, context_keys=ctx_keys or "(none)", session=session_id),
     )
 
-    extra: dict[str, Any] = {}
+    extra_cfg: dict[str, Any] = {}
     if context is not None:
-        extra["aurey_context"] = context
-    config = thread_config(session_id, **extra)
+        extra_cfg["aurey_context"] = context
+    wallet_seg = hosted_wallet_prompt_segment(hosted_wallet_address)
+    if wallet_seg.strip():
+        extra_cfg["wallet_context"] = wallet_seg.strip()
+    config = thread_config(session_id, **extra_cfg)
     merged: list[Any] = []
     trace_handler = build_agent_trace_handler(session_id=session_id)
     if trace_handler is not None:
@@ -164,8 +173,15 @@ def invoke_deep_agent_turn(
     if merged:
         config = {**config, "callbacks": merged}
 
+    sfx = (graph_cache_suffix or "").strip()
+    extra_sys = wallet_seg.strip() if wallet_seg.strip() else None
+
     try:
-        graph = svc.get_or_create_graph(model)
+        graph = svc.get_or_create_graph(
+            model,
+            graph_cache_suffix=sfx,
+            extra_system_prompt=extra_sys,
+        )
     except RuntimeError as exc:
         code = "deep_agent_unavailable"
         if "deepagents" in str(exc).lower():
@@ -185,7 +201,10 @@ def invoke_deep_agent_turn(
             ),
         )
 
+    overlay_token = None
     try:
+        if runtime_overlay is not None:
+            overlay_token = push_runtime_overlay(runtime_overlay)
         result = _invoke_graph_with_transient_retries(
             graph, message=message, config=config
         )
@@ -213,6 +232,9 @@ def invoke_deep_agent_turn(
                 message=err_msg,
             ),
         )
+    finally:
+        if overlay_token is not None:
+            reset_runtime_overlay(overlay_token)
 
     raw_messages = result.get("messages") if isinstance(result, dict) else None
     if not isinstance(raw_messages, list):

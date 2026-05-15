@@ -34,6 +34,7 @@ def test_settings_defaults():
     assert s.deep_agent_default_model == "openai:gpt-4o-mini"
     assert s.database_url is None
     assert s.ocv_agent_token_expiry_skew_seconds == 60.0
+    assert s.oneclaw_delegated_token_scope == "intents:sign"
 
 
 def test_settings_env_override(monkeypatch):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -29,6 +30,7 @@ from aurey.graphs.ens_eth import (
 )
 from aurey.graphs.evm_codec import to_checksum_evm_address
 from aurey.graphs.ports import HttpJsonPort, HttpJsonRequestError
+from aurey.principal import UserPrincipal
 from aurey.runtime import AureyRuntime
 from aurey.settings import AureySettings
 from tests.fakes.evm_rpc import rpc_factory_from_mapping
@@ -1183,7 +1185,34 @@ def test_tx_prepare_oneclaw_intents_requires_agent_id():
         }
     )
     assert out["error"]["code"] == "secret_not_configured"
-    assert "ocv_agent_id" in out["error"]["message"]
+    assert "signing agent id" in out["error"]["message"].lower()
+
+
+def test_tx_prepare_oneclaw_intents_with_principal_skips_ocv_agent_id():
+    settings = AureySettings(
+        evm_signing_mode="oneclaw_intents",
+        ocv_agent_id=None,
+        wallet_signing_key_secret_path=None,
+    )
+    base = _runtime(secrets={}, settings=settings, http=ScriptedHttpClient(), rpc_map={})
+    principal = UserPrincipal(
+        db_user_id="00000000-0000-0000-0000-000000000001",
+        user_agent_id="agt_user_prepare",
+        grant_ref_path="vaults/v1/grant",
+    )
+    runtime = replace(base, principal=principal)
+    out = build_tx_prepare_graph(runtime).invoke(
+        {
+            "input": {
+                "kind": "native_transfer",
+                "chain": "base",
+                "from_address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "to_address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "value_wei": 1,
+            }
+        }
+    )
+    assert out.get("error") is None
 
 
 def test_tx_prepare_oneclaw_intents_native_envelope():
@@ -1468,7 +1497,42 @@ def test_tx_execute_oneclaw_requires_agent_id():
     out = build_tx_execute_graph(runtime).invoke({"input": {"envelope": envelope}})
     assert out.get("result") is None
     assert out["error"]["code"] == "secret_not_configured"
-    assert "ocv_agent_id" in out["error"]["message"]
+    assert "signing agent id" in out["error"]["message"].lower()
+
+
+def test_tx_execute_oneclaw_intents_with_principal_skips_ocv_agent_id():
+    settings = AureySettings(
+        evm_signing_mode="oneclaw_intents",
+        ocv_agent_id=None,
+        wallet_signing_key_secret_path=None,
+    )
+    signer = FakeOneClawClient()
+    base = _runtime(
+        secrets={},
+        settings=settings,
+        http=ScriptedHttpClient(),
+        rpc_map={},
+        oneclaw_evm_signer=signer,
+    )
+    principal = UserPrincipal(
+        db_user_id="00000000-0000-0000-0000-000000000099",
+        user_agent_id="agt_principal_exec",
+        grant_ref_path="vaults/x/grant",
+    )
+    runtime = replace(base, principal=principal)
+    envelope = {
+        "kind": "native_transfer",
+        "chain_id": 8453,
+        "from_address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "to": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "data": "0x",
+        "value_hex": "0x1",
+        "signing_mode": "oneclaw_intents",
+        "signing_key_secret_path": None,
+    }
+    out = build_tx_execute_graph(runtime).invoke({"input": {"envelope": envelope}})
+    assert out.get("error") is None
+    assert out["result"]["tx_hash"].startswith("0x")
 
 
 def test_tx_execute_oneclaw_requires_runtime_signer():

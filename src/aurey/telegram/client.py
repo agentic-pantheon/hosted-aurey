@@ -13,6 +13,7 @@ from typing import Any
 from langchain_core.callbacks import BaseCallbackHandler
 
 from aurey.custody.errors import SecretNotFoundError, SecretStoreUnavailableError
+from aurey.principal_augment import augment_runtime_for_principal
 from aurey.service.bootstrap import bootstrap_aurey_service_state
 from aurey.service.invoke import AgentInvokeResult, invoke_deep_agent_turn
 from aurey.service.message_content import reply_preview_from_summary
@@ -333,6 +334,32 @@ def handle_telegram_text(
     context: dict[str, Any] = {"telegram_chat_id": str(chat_id)}
     if user_id is not None:
         context["telegram_user_id"] = str(user_id)
+
+    graph_suffix = ""
+    overlay = None
+    hosted_wallet: str | None = None
+    if state.onboarding is not None and user_id is not None:
+        try:
+            tg_uid = int(user_id)
+        except (TypeError, ValueError):
+            tg_uid = None
+        if tg_uid is not None:
+            principal = state.onboarding.user_principal_for_telegram_user(tg_uid)
+            if principal is not None:
+                session_id = f"user:{principal.db_user_id}"
+                graph_suffix = f"cloud:{principal.db_user_id}"
+                context["platform_user_id"] = principal.db_user_id
+                context["oneclaw_user_agent_id"] = principal.user_agent_id
+                hosted_wallet = principal.wallet_address
+                if state.settings.evm_signing_mode == "oneclaw_intents":
+                    try:
+                        overlay = augment_runtime_for_principal(state.runtime, principal)
+                    except RuntimeError:
+                        logging.getLogger("aurey.telegram").warning(
+                            "Hosted user turn could not build delegated signing runtime "
+                            "(check oneclaw_operator_http and delegated token scope).",
+                        )
+
     extras = [TelegramInvokeProgressCallback(progress_sink)] if progress_sink is not None else None
     result = invoke_deep_agent_turn(
         state,
@@ -341,6 +368,9 @@ def handle_telegram_text(
         context=context,
         model=model,
         extra_callbacks=extras,
+        runtime_overlay=overlay,
+        graph_cache_suffix=graph_suffix,
+        hosted_wallet_address=hosted_wallet,
     )
     if result.ok:
         return _last_text_message(result)

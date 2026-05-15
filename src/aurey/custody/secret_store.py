@@ -241,6 +241,8 @@ class OneClawHttpClient:
         self._access_token: str | None = None
         self._access_token_agent: str | None = None
         self._access_token_expires_at: float | None = None
+        # (user_agent_id, scope) -> (jwt, expires_at_monotonic | None)
+        self._delegated_tokens: dict[tuple[str, str], tuple[str, float | None]] = {}
 
     def get_secret(self, *, vault_id: str, path: str, agent_id: str | None = None) -> str:
         """Read a secret value from 1Claw without exposing it in errors."""
@@ -360,6 +362,130 @@ class OneClawHttpClient:
                 _log.debug("1Claw reusing cached access token agent_id=%s", agent_id)
                 return self._access_token
         return self._fetch_access_token(agent_id)
+
+    def _invalidate_delegated_token(self, user_agent_id: str, scope: str) -> None:
+        self._delegated_tokens.pop((user_agent_id.strip(), scope.strip()), None)
+
+    def _fetch_delegated_access_token(
+        self,
+        *,
+        user_agent_id: str,
+        subject_token: str,
+        scope: str,
+    ) -> str:
+        """Exchange grant + actor API key for a short-lived JWT (never logs token bodies)."""
+
+        ag = user_agent_id.strip()
+        sc = scope.strip()
+        url = f"{self._base_url}/v1/auth/delegated-token"
+        _log.info(
+            "1Claw requesting delegated access token POST %s user_agent_id=%s scope=%s "
+            "(credential bodies not logged)",
+            url,
+            ag,
+            sc,
+        )
+        body = json.dumps(
+            {
+                "subject_token": subject_token.strip(),
+                "actor_token": self._api_key,
+                "scope": sc,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        request = Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            _log.warning(
+                "1Claw POST delegated-token failed HTTP %s url=%s user_agent_id=%s scope=%s "
+                "response_body_preview=%s",
+                exc.code,
+                url,
+                ag,
+                sc,
+                _http_error_snippet(exc, max_len=240),
+            )
+            raise SecretStoreUnavailableError(
+                "/v1/auth/delegated-token",
+                store_name="1Claw",
+                detail=(
+                    f"Delegated token exchange failed with HTTP {exc.code}. "
+                    "Verify delegated scope configuration and grant validity."
+                ),
+            ) from exc
+        except (OSError, URLError, json.JSONDecodeError) as exc:
+            _log.warning(
+                "1Claw POST delegated-token failed (network/json) url=%s user_agent_id=%s "
+                "scope=%s err=%s",
+                url,
+                ag,
+                sc,
+                type(exc).__name__,
+            )
+            raise SecretStoreUnavailableError(
+                "/v1/auth/delegated-token",
+                store_name="1Claw",
+                detail=(
+                    "Delegated token exchange failed (network error or invalid JSON)."
+                ),
+            ) from exc
+
+        token = payload.get("access_token")
+        if not isinstance(token, str) or not token.strip():
+            raise SecretStoreUnavailableError(
+                "/v1/auth/delegated-token",
+                store_name="1Claw",
+                detail="Delegated token response contained no usable `access_token`.",
+            )
+
+        jwt_out = token.strip()
+        expires_raw = payload.get("expires_in")
+        if isinstance(expires_raw, (int, float)) and float(expires_raw) > 0:
+            ttl = float(expires_raw) - self._agent_token_expiry_skew_seconds
+            exp_at = time.monotonic() + max(0.0, ttl)
+        else:
+            exp_at = None
+        self._delegated_tokens[(ag, sc)] = (jwt_out, exp_at)
+        _log.info(
+            "1Claw delegated token cached user_agent_id=%s scope=%s (jwt not logged; "
+            "expires_in_refresh=%s)",
+            ag,
+            sc,
+            "yes" if exp_at is not None else "no (refresh on 401 only)",
+        )
+        return jwt_out
+
+    def _bearer_for_delegated(self, user_agent_id: str, subject_token: str, scope: str) -> str:
+        ag = user_agent_id.strip()
+        sc = scope.strip()
+        key = (ag, sc)
+        cached = self._delegated_tokens.get(key)
+        if cached:
+            jwt_cached, exp_at = cached
+            if exp_at is not None and time.monotonic() >= exp_at:
+                _log.info(
+                    "1Claw cached delegated token past expires_in window (skew=%ss); refreshing "
+                    "user_agent_id=%s scope=%s",
+                    self._agent_token_expiry_skew_seconds,
+                    ag,
+                    sc,
+                )
+                self._invalidate_delegated_token(ag, sc)
+            else:
+                _log.debug("1Claw reusing cached delegated token user_agent_id=%s scope=%s", ag, sc)
+                return jwt_cached
+        return self._fetch_delegated_access_token(
+            user_agent_id=ag,
+            subject_token=subject_token,
+            scope=sc,
+        )
 
     def _secret_url_path_suffix(self, path: str) -> str:
         normalized = path.strip().lstrip("/")
@@ -487,6 +613,8 @@ class OneClawHttpClient:
         chain: str,
         transaction: dict[str, Any],
         signing_key_path: str | None = None,
+        delegated_subject_token: str | None = None,
+        delegated_scope: str | None = None,
     ) -> OneClawSignTransactionResult:
         """Sign an unsigned EVM transaction via 1Claw unified signing."""
 
@@ -495,8 +623,16 @@ class OneClawHttpClient:
         if not ag or not ch:
             raise ValueError("agent_id and chain must be non-empty.")
 
+        del_subj = delegated_subject_token.strip() if delegated_subject_token else ""
+        del_scope = delegated_scope.strip() if delegated_scope else ""
+        use_delegated = bool(del_subj and del_scope)
+
         sign_path = f"/v1/agents/{quote(ag, safe='')}/sign"
-        bearer = self._bearer_for_agent(ag)
+        bearer = (
+            self._bearer_for_delegated(ag, del_subj, del_scope)
+            if use_delegated
+            else self._bearer_for_agent(ag)
+        )
         try:
             return self._http_post_agent_sign(
                 agent_id=ag,
@@ -507,8 +643,12 @@ class OneClawHttpClient:
             )
         except HTTPError as exc:
             if exc.code == 401:
-                self._invalidate_access_token(ag)
-                bearer = self._bearer_for_agent(ag)
+                if use_delegated:
+                    self._invalidate_delegated_token(ag, del_scope)
+                    bearer = self._bearer_for_delegated(ag, del_subj, del_scope)
+                else:
+                    self._invalidate_access_token(ag)
+                    bearer = self._bearer_for_agent(ag)
                 try:
                     return self._http_post_agent_sign(
                         agent_id=ag,
@@ -523,7 +663,7 @@ class OneClawHttpClient:
                         sign_path,
                         store_name="1Claw",
                         detail=(
-                            "Unified signing failed after refreshing the agent token "
+                            "Unified signing failed after refreshing credentials "
                             f"(HTTP {exc2.code}).{f' Body: {snip2}' if snip2 else ''}"
                         ),
                     ) from exc2
@@ -639,10 +779,16 @@ class FakeOneClawClient:
         chain: str,
         transaction: dict[str, Any],
         signing_key_path: str | None = None,
+        delegated_subject_token: str | None = None,
+        delegated_scope: str | None = None,
     ) -> OneClawSignTransactionResult:
         req = {"agent_id": agent_id, "chain": chain, "transaction": dict(transaction)}
         if signing_key_path is not None:
             req["signing_key_path"] = signing_key_path
+        if delegated_subject_token is not None:
+            req["delegated_subject_token"] = delegated_subject_token
+        if delegated_scope is not None:
+            req["delegated_scope"] = delegated_scope
         self.sign_requests.append(req)
         if self._sign_exception is not None:
             raise self._sign_exception
