@@ -31,7 +31,8 @@ AUREY_DEEP_USER_PROMPT = (
     "Privacy posture: Your only enduring user identifier here is their public wallet address "
     "when configured; you do not need their legal name and should not personalize by asking "
     "for identifying details. Private keys and API secrets never belong in chat: they are held "
-    "outside the model and resolved server-side via 1Claw vault paths only—never ask for "
+    "outside the model and resolved server-side via operator environment variables or 1Claw "
+    "vault paths only—never ask for "
     "mnemonics, raw keys, or provider API key strings.\n"
     "Rules:\n"
     "- Call tools with structured arguments only (no opaque JSON blobs).\n"
@@ -134,13 +135,28 @@ def runtime_wiring_context_for_deep_agent_prompt(settings: AureySettings) -> str
         "- 1Claw hosted-agent token flow: "
         + ("configured" if (settings.oneclaw_agent_id or "").strip() else "not configured"),
         f"- EVM signing mode: {settings.evm_signing_mode}",
-        "- Alchemy-backed reads/RPC via vault secret: "
-        + ("configured" if (settings.alchemy_api_secret_path or "").strip() else "not configured"),
-        "- Authenticated LiFi (vault API key path): "
-        + ("configured" if (settings.lifi_api_secret_path or "").strip() else "not configured"),
+        f"- Alchemy-backed reads/RPC: "
+        + (
+            "configured"
+            if (settings.alchemy_api_key or "").strip()
+            or (settings.alchemy_api_secret_path or "").strip()
+            else "not configured"
+        ),
+        "- Authenticated LiFi (env or vault API key): "
+        + (
+            "configured"
+            if (settings.lifi_api_key or "").strip()
+            or (settings.lifi_api_secret_path or "").strip()
+            else "not configured"
+        ),
         f"- LiFi ``integrator`` tag: {'set (not shown)' if (settings.lifi_integrator or '').strip() else 'empty'}",
-        "- Telegram bot token (vault-backed): "
-        + ("configured" if (settings.telegram_bot_token_secret_path or "").strip() else "not configured"),
+        "- Telegram bot token (env or vault-backed): "
+        + (
+            "configured"
+            if (settings.telegram_bot_token or "").strip()
+            or (settings.telegram_bot_token_secret_path or "").strip()
+            else "not configured"
+        ),
     ]
     ws = (settings.wallet_signing_key_secret_path or "").strip()
     if ws:
@@ -160,7 +176,11 @@ def runtime_wiring_context_for_deep_agent_prompt(settings: AureySettings) -> str
 
 
 def wallet_context_for_deep_agent_prompt(settings: AureySettings) -> str:
-    """Return a suffix for the deep agent system prompt, or an empty string if unset or invalid."""
+    """Return wallet-address suffix for the deep agent system prompt, or empty if unset.
+
+    Provider credentials (Alchemy, LiFi, Telegram) are configured separately via operator env
+    variables or vault paths; they are not part of this wallet context string.
+    """
 
     raw = (settings.deep_agent_wallet_address or "").strip()
     if not raw:

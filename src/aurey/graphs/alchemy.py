@@ -10,17 +10,13 @@ Transfers JSON-RPC:
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
-from aurey.custody.errors import (
-    SecretNotFoundError,
-    SecretStoreUnavailableError,
-    secret_unavailable_graph_details,
-)
+from aurey.graphs.api_key_resolution import effective_alchemy_api_key
 from aurey.graphs.chains import chain_id_for, chain_info
 from aurey.graphs.checkpoint_serde import uint256_checkpoint_str
 from aurey.graphs.evm_codec import (
@@ -158,29 +154,7 @@ def _validate_node(state: AlchemyGraphState) -> AlchemyGraphState:
 
 
 def _resolve_alchemy_key(runtime: AureyRuntime) -> tuple[str | None, dict[str, Any] | None]:
-    path = runtime.settings.alchemy_api_secret_path
-    if not path:
-        err = GraphErrorBody(
-            code="secret_not_configured",
-            message="Alchemy API secret path is not configured.",
-        ).model_dump()
-        return None, err
-    try:
-        return runtime.secret_store.get_secret(path).reveal(), None
-    except SecretNotFoundError:
-        err = GraphErrorBody(
-            code="secret_not_found",
-            message="Alchemy API secret could not be resolved.",
-            details={"secret_kind": "alchemy_api"},
-        ).model_dump()
-        return None, err
-    except SecretStoreUnavailableError as exc:
-        err = GraphErrorBody(
-            code="secret_unavailable",
-            message="Secret store unavailable while resolving Alchemy API key.",
-            details=secret_unavailable_graph_details(secret_kind="alchemy_api", exc=exc),
-        ).model_dump()
-        return None, err
+    return effective_alchemy_api_key(runtime.settings, runtime.secret_store)
 
 
 def _pick_usd_price(prices_raw: Any) -> str | None:

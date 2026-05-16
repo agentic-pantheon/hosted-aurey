@@ -9,11 +9,7 @@ from urllib.parse import urlencode
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
-from aurey.custody.errors import (
-    SecretNotFoundError,
-    SecretStoreUnavailableError,
-    secret_unavailable_graph_details,
-)
+from aurey.graphs.api_key_resolution import effective_lifi_api_key
 from aurey.graphs.chains import chain_id_for
 from aurey.graphs.ports import HttpJsonRequestError
 from aurey.graphs.results import GraphErrorBody, LiFiStatusResult
@@ -28,16 +24,29 @@ __all__ = ["LiFiStatusInput", "build_lifi_status_graph"]
 
 
 class LiFiStatusInput(BaseModel):
-    """``GET /v1/status`` on ``runtime.lifi_base_url``; optional ``x-lifi-api-key`` from settings."""
+    """``GET /v1/status`` on ``runtime.lifi_base_url``.
+
+    Optional ``x-lifi-api-key`` from env or vault path in settings.
+    """
 
     tx_hash: str = Field(
         min_length=1,
         description="Sending-chain tx hash, destination tx hash, or LiFi step id.",
     )
-    from_chain: str | None = Field(default=None, description="Source chain slug (Aurey registry).")
-    to_chain: str | None = Field(default=None, description="Destination chain slug (Aurey registry).")
+    from_chain: str | None = Field(
+        default=None,
+        description="Source chain slug (Aurey registry).",
+    )
+    to_chain: str | None = Field(
+        default=None,
+        description="Destination chain slug (Aurey registry).",
+    )
     from_chain_id: int | None = Field(default=None, ge=1, description="Numeric sending chain id.")
-    to_chain_id: int | None = Field(default=None, ge=1, description="Numeric destination chain id.")
+    to_chain_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Numeric destination chain id.",
+    )
     bridge: str | None = Field(default=None, description="Bridging tool id (LiFi tools enum).")
 
 
@@ -56,28 +65,9 @@ def _validation_error(exc: ValidationError) -> dict[str, Any]:
 
 
 def _resolve_lifi_key(runtime: AureyRuntime) -> tuple[str | None, dict[str, Any] | None]:
-    """Optional key when path unset; required resolution when ``lifi_api_secret_path`` is set."""
+    """LiFi key via env or, when a path is set, vault resolution."""
 
-    path = runtime.settings.lifi_api_secret_path
-    if path is None or not str(path).strip():
-        return None, None
-    path = str(path).strip()
-    try:
-        return runtime.secret_store.get_secret(path).reveal(), None
-    except SecretNotFoundError:
-        err = GraphErrorBody(
-            code="secret_not_found",
-            message="LiFi API secret could not be resolved.",
-            details={"secret_kind": "lifi_api"},
-        ).model_dump()
-        return None, err
-    except SecretStoreUnavailableError as exc:
-        err = GraphErrorBody(
-            code="secret_unavailable",
-            message="Secret store unavailable while resolving LiFi API key.",
-            details=secret_unavailable_graph_details(secret_kind="lifi_api", exc=exc),
-        ).model_dump()
-        return None, err
+    return effective_lifi_api_key(runtime.settings, runtime.secret_store)
 
 
 def _resolved_lifi_chain_query_value(

@@ -291,7 +291,7 @@ def _earn_deposit_vault_eligible(vault: dict[str, Any]) -> tuple[bool, str | Non
 
 
 class EarnListChainsArgs(BaseModel):
-    """Discover LiFi Earn-supported chains (vault discovery); optional LiFi key via ``lifi_api_secret_path``."""
+    """Discover LiFi Earn-supported chains (vault discovery); optional LiFi key via env or ``lifi_api_secret_path``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -391,7 +391,7 @@ class EarnPrepareDepositArgs(BaseModel):
 
 
 class AlchemyTokenPricesArgs(BaseModel):
-    """Alchemy token spot prices; requires ``alchemy_api_secret_path`` in Aurey settings."""
+    """Alchemy token spot prices; requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` in settings."""
 
     chain: str = Field(
         min_length=1,
@@ -408,7 +408,7 @@ class AlchemyTokenPricesArgs(BaseModel):
 
 
 class AlchemyPortfolioArgs(BaseModel):
-    """Alchemy portfolio (tokens-by-wallet); requires ``alchemy_api_secret_path`` in settings."""
+    """Alchemy portfolio (tokens-by-wallet); requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` in settings."""
 
     chain: str = Field(
         min_length=1,
@@ -421,7 +421,7 @@ class AlchemyPortfolioArgs(BaseModel):
 
 
 class AlchemyTransferHistoryArgs(BaseModel):
-    """Alchemy transfer history via ``alchemy_getAssetTransfers``; requires ``alchemy_api_secret_path``."""
+    """Alchemy transfer history via ``alchemy_getAssetTransfers``; requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path``."""
 
     chain: str = Field(
         min_length=1,
@@ -506,7 +506,7 @@ _ERC20_AMOUNT_FIELD = Field(
 
 
 class TxPrepareErc20TransferArgs(BaseModel):
-    """Prepare ERC-20 transfer; RPC from Alchemy path if configured."""
+    """Prepare ERC-20 transfer; RPC from Alchemy credentials (env or vault path) if configured."""
 
     chain: str = Field(min_length=1, description="Chain slug.")
     from_address: str = Field(min_length=1)
@@ -526,7 +526,7 @@ class TxPrepareErc20ApprovalArgs(BaseModel):
 
 
 class EvmGetNativeBalanceArgs(BaseModel):
-    """Native balance via JSON-RPC; requires ``alchemy_api_secret_path`` for RPC URL derivation."""
+    """Native balance via JSON-RPC; requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` for RPC URL derivation."""
 
     chain: str = Field(min_length=1, description="Chain slug (e.g. ethereum, base).")
     wallet_address: str = Field(min_length=1, description="Address to read balance for.")
@@ -543,7 +543,7 @@ class ResolveKnownAddressArgs(BaseModel):
 
 
 class EvmGetErc20BalanceArgs(BaseModel):
-    """ERC-20 ``balanceOf`` via JSON-RPC; requires ``alchemy_api_secret_path`` for RPC."""
+    """ERC-20 ``balanceOf`` via JSON-RPC; requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` for RPC."""
 
     chain: str = Field(min_length=1)
     wallet_address: str = Field(min_length=1)
@@ -551,7 +551,7 @@ class EvmGetErc20BalanceArgs(BaseModel):
 
 
 class EvmGetErc20DecimalsArgs(BaseModel):
-    """Read token ``decimals()``; uses RPC from Alchemy-backed URL when configured."""
+    """Read token ``decimals()``; uses RPC from Alchemy-backed URL (env key or vault path) when configured."""
 
     chain: str = Field(min_length=1)
     token_address: str = Field(min_length=1)
@@ -591,7 +591,7 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
 
     @tool(args_schema=EvmGetNativeBalanceArgs)
     def evm_get_native_balance(chain: str, wallet_address: str) -> dict[str, Any]:
-        """Native token balance via JSON-RPC; RPC URL is derived from ``alchemy_api_secret_path`` in settings (no raw URLs in chat)."""
+        """Native token balance via JSON-RPC; RPC URL is derived from ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` in settings (no raw URLs in chat)."""
         payload = EvmGetNativeBalanceArgs(chain=chain, wallet_address=wallet_address)
         graph_in = ReadGraphInput(
             operation="native_balance",
@@ -620,7 +620,7 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         wallet_address: str,
         token_address: str,
     ) -> dict[str, Any]:
-        """ERC-20 ``balanceOf`` via RPC; requires Alchemy-derived RPC when using default wiring (see ``alchemy_api_secret_path`` in settings)."""
+        """ERC-20 ``balanceOf`` via RPC; requires Alchemy-derived RPC when using default wiring (see ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` in settings)."""
         payload = EvmGetErc20BalanceArgs(
             chain=chain,
             wallet_address=wallet_address,
@@ -636,7 +636,7 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
 
     @tool(args_schema=EvmGetErc20DecimalsArgs)
     def evm_get_erc20_decimals(chain: str, token_address: str) -> dict[str, Any]:
-        """Read ERC-20 ``decimals()`` over JSON-RPC (Alchemy-derived URL when ``alchemy_api_secret_path`` is set)."""
+        """Read ERC-20 ``decimals()`` over JSON-RPC (Alchemy-derived URL when ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` is set)."""
         payload = EvmGetErc20DecimalsArgs(chain=chain, token_address=token_address)
         graph_in = ReadGraphInput(
             operation="erc20_decimals",
@@ -674,7 +674,7 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         wallet_address: str,
         token_addresses: list[str],
     ) -> dict[str, Any]:
-        """Alchemy Prices API quotes by token address; requires ``alchemy_api_secret_path`` in Aurey settings (vault path, never the raw key)."""
+        """Alchemy Prices API quotes by token address; requires Alchemy credentials in Aurey settings (``AUREY_ALCHEMY_API_KEY`` or vault path—never paste the raw key in chat)."""
         payload = AlchemyTokenPricesArgs(
             chain=chain,
             wallet_address=wallet_address,
@@ -694,7 +694,7 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         token_address: str,
         usd_notional: str,
     ) -> dict[str, Any]:
-        """Size a **sell** in raw token units from a **USD notional** (requires ``alchemy_api_secret_path``).
+        """Size a **sell** in raw token units from a **USD notional** (requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path``).
 
         Uses Alchemy spot price and on-chain ``decimals()`` with **Decimal** math server-side—prefer over
         hand-calculating ``from_amount_wei`` when the user asks for ``$n`` worth of a token. Returns
@@ -725,7 +725,7 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         chain: str,
         wallet_address: str,
     ) -> dict[str, Any]:
-        """Alchemy Data API portfolio (tokens-by-wallet); requires ``alchemy_api_secret_path`` in settings."""
+        """Alchemy Data API portfolio (tokens-by-wallet); requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` in settings."""
         state = alchemy_g.invoke(
             {
                 "input": {
@@ -744,7 +744,7 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         chain: str,
         wallet_address: str,
     ) -> dict[str, Any]:
-        """Recent ERC-20 and external transfers via Alchemy ``alchemy_getAssetTransfers``; requires ``alchemy_api_secret_path`` in settings."""
+        """Recent ERC-20 and external transfers via Alchemy ``alchemy_getAssetTransfers``; requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` in settings."""
         state = alchemy_g.invoke(
             {
                 "input": {
@@ -882,7 +882,7 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         slippage: float | None = None,
         order: Literal["FASTEST", "CHEAPEST"] | None = None,
     ) -> dict[str, Any]:
-        """LiFi swap quote from ``GET /v1/quote``; optional LiFi key from ``lifi_api_secret_path`` in settings (path only).
+        """LiFi swap quote from ``GET /v1/quote``; optional LiFi key from ``AUREY_LIFI_API_KEY`` or ``lifi_api_secret_path`` in settings.
 
         Uses LiFi ``GET /v1/quote`` (see https://docs.li.fi/llms.txt). Optional ``slippage`` is
         a decimal fraction (e.g. ``0.005`` = 0.5%%). Optional ``order`` is ``FASTEST`` or
@@ -1076,6 +1076,8 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         bridge: str | None = None,
     ) -> dict[str, Any]:
         """Poll **LiFi** ``GET /v1/status`` for bridging / Composer transfers.
+
+        Optional authenticated calls use ``AUREY_LIFI_API_KEY`` or ``lifi_api_secret_path`` when configured.
 
         Use after ``swap_prepare`` or ``earn_prepare_deposit`` when **source and destination chains
         differ**: pass the tx hash from the *sending* chain (or LiFi step id), and optional

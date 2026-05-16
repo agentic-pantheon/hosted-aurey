@@ -301,7 +301,11 @@ def telegram_message_chunks(text: str) -> list[str]:
 
 
 def resolve_telegram_bot_token(state: AureyServiceState) -> str:
-    """Resolve the Telegram bot token via SecretStore using a configured vault path."""
+    """Resolve the Telegram bot token from settings env or SecretStore vault path."""
+
+    direct = (state.settings.telegram_bot_token or "").strip()
+    if direct:
+        return direct
 
     path = state.settings.telegram_bot_token_secret_path
     if not path:

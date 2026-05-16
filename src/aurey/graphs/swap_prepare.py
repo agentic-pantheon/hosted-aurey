@@ -10,11 +10,7 @@ from urllib.parse import urlencode
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
-from aurey.custody.errors import (
-    SecretNotFoundError,
-    SecretStoreUnavailableError,
-    secret_unavailable_graph_details,
-)
+from aurey.graphs.api_key_resolution import effective_lifi_api_key
 from aurey.graphs.chains import chain_id_for, chain_info
 from aurey.graphs.evm_codec import (
     decode_abi_uint256_word,
@@ -40,7 +36,10 @@ _LIFI_HTTP_USER_AGENT = "Aurey/1.0 (LiFi API client; +https://docs.li.fi/)"
 
 
 class SwapPrepareInput(BaseModel):
-    """LiFi swap quote (``GET /v1/quote``); optional authenticated LiFi when ``lifi_api_secret_path`` is set in Aurey settings."""
+    """LiFi swap quote (`GET /v1/quote`).
+
+    Optional LiFi key from env or ``lifi_api_secret_path``.
+    """
 
     from_chain: str = Field(min_length=1, description="Source chain slug.")
     to_chain: str = Field(min_length=1, description="Destination chain slug.")
@@ -119,33 +118,7 @@ def _validate_node(state: SwapGraphState) -> SwapGraphState:
 
 
 def _resolve_lifi_key(runtime: AureyRuntime) -> tuple[str | None, dict[str, Any] | None]:
-    """Return ``(api_key, None)`` or ``(None, None)`` when LiFi should run without a key.
-
-    If ``lifi_api_secret_path`` is unset or blank, LiFi is called without ``x-lifi-api-key``
-    (public / IP-based rate limits). If a path is set, the secret must resolve or an error
-    dict is returned.
-    """
-
-    path = runtime.settings.lifi_api_secret_path
-    if path is None or not str(path).strip():
-        return None, None
-    path = str(path).strip()
-    try:
-        return runtime.secret_store.get_secret(path).reveal(), None
-    except SecretNotFoundError:
-        err = GraphErrorBody(
-            code="secret_not_found",
-            message="LiFi API secret could not be resolved.",
-            details={"secret_kind": "lifi_api"},
-        ).model_dump()
-        return None, err
-    except SecretStoreUnavailableError as exc:
-        err = GraphErrorBody(
-            code="secret_unavailable",
-            message="Secret store unavailable while resolving LiFi API key.",
-            details=secret_unavailable_graph_details(secret_kind="lifi_api", exc=exc),
-        ).model_dump()
-        return None, err
+    return effective_lifi_api_key(runtime.settings, runtime.secret_store)
 
 
 def _normalize_lifi_token_param(value: str) -> str:
@@ -348,7 +321,10 @@ def _allowance_context_and_actionable_hint(
     owner: str,
     hint: LiFiAllowanceHint | None,
 ) -> tuple[LiFiAllowanceContext | None, LiFiAllowanceHint | None]:
-    """Build always-on allowance context; omit actionable ``allowance`` only when on-chain is enough."""
+    """Build always-on allowance context.
+
+    Omit actionable ``allowance`` only when on-chain allowance is enough.
+    """
 
     if hint is None:
         return None, None

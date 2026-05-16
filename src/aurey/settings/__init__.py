@@ -1,5 +1,7 @@
 """Application settings (paths-only secret references, 1Claw connection config).
 
+Optional plaintext ``AUREY_*`` keys for Alchemy, LiFi, and Telegram may be set for hosted
+deployments; when non-empty they take precedence over vault ``*_secret_path`` resolution.
 Note: Configuration lives in this package intentionally; do not add a sibling
 ``aurey/settings.py`` module, which would conflict with this package name.
 """
@@ -178,12 +180,28 @@ class AureySettings(BaseSettings):
         default=None,
         description="1Claw vault path for the Alchemy API key used for reads and RPC URLs.",
     )
+    alchemy_api_key: str | None = Field(
+        default=None,
+        description=(
+            "Optional plaintext Alchemy API key (``AUREY_ALCHEMY_API_KEY``). "
+            "When set, used instead of ``alchemy_api_secret_path``."
+        ),
+        validation_alias=AliasChoices("AUREY_ALCHEMY_API_KEY"),
+    )
     lifi_api_secret_path: str | None = Field(
         default=None,
         description=(
             "Optional 1Claw vault path for LiFi API key. If unset, swap quotes use "
             "unauthenticated LiFi (lower rate limits)."
         ),
+    )
+    lifi_api_key: str | None = Field(
+        default=None,
+        description=(
+            "Optional plaintext LiFi API key (``AUREY_LIFI_API_KEY``). When set, used instead of "
+            "``lifi_api_secret_path``."
+        ),
+        validation_alias=AliasChoices("AUREY_LIFI_API_KEY"),
     )
     lifi_integrator: str = Field(
         default="aurey",
@@ -210,6 +228,14 @@ class AureySettings(BaseSettings):
     telegram_bot_token_secret_path: str | None = Field(
         default=None,
         description="1Claw vault path for the Telegram bot token.",
+    )
+    telegram_bot_token: str | None = Field(
+        default=None,
+        description=(
+            "Optional plaintext Telegram bot token (``AUREY_TELEGRAM_BOT_TOKEN``). When set, "
+            "preferred over ``telegram_bot_token_secret_path``."
+        ),
+        validation_alias=AliasChoices("AUREY_TELEGRAM_BOT_TOKEN"),
     )
     telegram_allowed_chat_ids: str | None = Field(
         default=None,
@@ -238,6 +264,14 @@ class AureySettings(BaseSettings):
         ),
         validation_alias=AliasChoices("AUREY_DATABASE_URL", "DATABASE_URL"),
     )
+
+    @field_validator("alchemy_api_key", "lifi_api_key", "telegram_bot_token", mode="before")
+    @classmethod
+    def _strip_optional_plaintext_api_credentials(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
 
     @field_validator("hosted_synthetic_email_domain")
     @classmethod

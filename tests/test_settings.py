@@ -15,12 +15,15 @@ def test_settings_defaults():
     assert s.oneclaw_api_key_secret_source == "AUREY_ONECLAW_BOOTSTRAP_API_KEY"
     assert s.oneclaw_agent_id is None
     assert s.alchemy_api_secret_path is None
+    assert s.alchemy_api_key is None
     assert s.lifi_api_secret_path is None
+    assert s.lifi_api_key is None
     assert s.lifi_integrator == "aurey"
     assert s.evm_signing_mode == "vault_key"
     assert s.evm_signing_requires_wallet_signing_key_secret_path is True
     assert s.wallet_signing_key_secret_path is None
     assert s.telegram_bot_token_secret_path is None
+    assert s.telegram_bot_token is None
     assert s.telegram_allowed_chat_ids is None
     assert s.telegram_allowed_chat_id_allowlist is None
     assert s.deep_agent_default_model == "openai:gpt-4o-mini"
@@ -144,6 +147,32 @@ def test_settings_platform_api_key_from_env(monkeypatch):
     monkeypatch.setenv("AUREY_PLATFORM_API_KEY", "plt_test_fake")
     s = AureySettings()
     assert s.platform_api_key == "plt_test_fake"
+
+
+def test_settings_plaintext_api_keys_from_env(monkeypatch) -> None:
+    for name in (
+        "AUREY_ALCHEMY_API_KEY",
+        "AUREY_LIFI_API_KEY",
+        "AUREY_TELEGRAM_BOT_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AUREY_ALCHEMY_API_KEY", "alchemy-env")
+    monkeypatch.setenv("AUREY_LIFI_API_KEY", "lifi-env")
+    monkeypatch.setenv("AUREY_TELEGRAM_BOT_TOKEN", "telegram-env")
+    s = AureySettings()
+    assert s.alchemy_api_key == "alchemy-env"
+    assert s.lifi_api_key == "lifi-env"
+    assert s.telegram_bot_token == "telegram-env"
+
+
+def test_settings_plaintext_api_keys_trim_and_empty(monkeypatch) -> None:
+    monkeypatch.delenv("AUREY_ALCHEMY_API_KEY", raising=False)
+    monkeypatch.setenv("AUREY_ALCHEMY_API_KEY", "  k  ")
+    s = AureySettings()
+    assert s.alchemy_api_key == "k"
+    monkeypatch.setenv("AUREY_ALCHEMY_API_KEY", "   ")
+    s2 = AureySettings()
+    assert s2.alchemy_api_key is None
 
 
 def test_resolve_operator_agent_api_key(monkeypatch):

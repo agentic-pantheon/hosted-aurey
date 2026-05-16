@@ -9,11 +9,7 @@ from urllib.parse import quote, urlencode
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
-from aurey.custody.errors import (
-    SecretNotFoundError,
-    SecretStoreUnavailableError,
-    secret_unavailable_graph_details,
-)
+from aurey.graphs.api_key_resolution import effective_lifi_api_key
 from aurey.graphs.chains import chain_id_for, chain_name_for_id
 from aurey.graphs.evm_codec import normalize_evm_address, to_checksum_evm_address
 from aurey.graphs.ports import HttpJsonRequestError
@@ -39,7 +35,10 @@ __all__ = ["EarnGraphInput", "build_earn_graph"]
 
 
 class EarnGraphInput(BaseModel):
-    """LiFi Earn (`https://earn.li.fi`); optional ``x-lifi-api-key`` from ``lifi_api_secret_path``."""
+    """LiFi Earn (`https://earn.li.fi`).
+
+    Optional ``x-lifi-api-key`` from env or ``lifi_api_secret_path``.
+    """
 
     operation: Literal[
         "list_chains",
@@ -48,12 +47,33 @@ class EarnGraphInput(BaseModel):
         "get_vault",
         "portfolio_positions",
     ]
-    chain: str | None = Field(default=None, description="Chain slug (resolved via chain_id_for when set).")
-    chain_id: int | None = Field(default=None, ge=1, description="Numeric chain id (Earn API / EVM).")
-    vault_address: str | None = Field(default=None, description="Vault contract for get_vault.")
-    wallet_address: str | None = Field(default=None, description="User wallet for portfolio_positions.")
-    asset: str | None = Field(default=None, min_length=1, description="list_vaults filter (address or symbol).")
-    protocol: str | None = Field(default=None, min_length=1, description="list_vaults protocol id filter.")
+    chain: str | None = Field(
+        default=None,
+        description="Chain slug (resolved via chain_id_for when set).",
+    )
+    chain_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Numeric chain id (Earn API / EVM).",
+    )
+    vault_address: str | None = Field(
+        default=None,
+        description="Vault contract for get_vault.",
+    )
+    wallet_address: str | None = Field(
+        default=None,
+        description="User wallet for portfolio_positions.",
+    )
+    asset: str | None = Field(
+        default=None,
+        min_length=1,
+        description="list_vaults filter (address or symbol).",
+    )
+    protocol: str | None = Field(
+        default=None,
+        min_length=1,
+        description="list_vaults protocol id filter.",
+    )
     min_tvl_usd: float | None = Field(default=None, ge=0.0)
     is_transactional: bool | None = None
     is_redeemable: bool | None = None
@@ -78,28 +98,9 @@ def _validation_error(exc: ValidationError) -> dict[str, Any]:
 
 
 def _resolve_lifi_key(runtime: AureyRuntime) -> tuple[str | None, dict[str, Any] | None]:
-    """Mirror swap_prepare: optional key when path unset; required resolution when path is set."""
+    """Optional LiFi key from env or vault (same semantics as ``swap_prepare``)."""
 
-    path = runtime.settings.lifi_api_secret_path
-    if path is None or not str(path).strip():
-        return None, None
-    path = str(path).strip()
-    try:
-        return runtime.secret_store.get_secret(path).reveal(), None
-    except SecretNotFoundError:
-        err = GraphErrorBody(
-            code="secret_not_found",
-            message="LiFi API secret could not be resolved.",
-            details={"secret_kind": "lifi_api"},
-        ).model_dump()
-        return None, err
-    except SecretStoreUnavailableError as exc:
-        err = GraphErrorBody(
-            code="secret_unavailable",
-            message="Secret store unavailable while resolving LiFi API key.",
-            details=secret_unavailable_graph_details(secret_kind="lifi_api", exc=exc),
-        ).model_dump()
-        return None, err
+    return effective_lifi_api_key(runtime.settings, runtime.secret_store)
 
 
 def _earn_headers(runtime: AureyRuntime, api_key: str | None) -> dict[str, str]:
@@ -158,7 +159,11 @@ def _resolved_chain_id_for_filters(
             return None, GraphErrorBody(
                 code="invalid_input",
                 message="chain and chain_id disagree.",
-                details={"chain": str(chain).strip().lower(), "chain_id": chain_id, "resolved_chain_id": cid_slug},
+                details={
+                    "chain": str(chain).strip().lower(),
+                    "chain_id": chain_id,
+                    "resolved_chain_id": cid_slug,
+                },
             ).model_dump()
         return chain_id, None
 
@@ -400,7 +405,12 @@ def _validate_node(state: EarnGraphState) -> EarnGraphState:
             }
         return {}
 
-    return {"error": GraphErrorBody(code="invalid_input", message="Unknown earn operation.").model_dump()}
+    return {
+        "error": GraphErrorBody(
+            code="invalid_input",
+            message="Unknown earn operation.",
+        ).model_dump(),
+    }
 
 
 def _execute_node(runtime: AureyRuntime, state: EarnGraphState) -> EarnGraphState:
@@ -577,7 +587,8 @@ def _execute_node(runtime: AureyRuntime, state: EarnGraphState) -> EarnGraphStat
                 if isinstance(x, dict)
             ]
             bundle = EarnPortfolioPositionsResult(positions=positions)
-            return {"result": {"positions": [_dump_portfolio_position(p) for p in bundle.positions]}}
+            dumped = [_dump_portfolio_position(p) for p in bundle.positions]
+            return {"result": {"positions": dumped}}
 
         return {
             "error": GraphErrorBody(

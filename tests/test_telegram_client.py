@@ -252,6 +252,27 @@ def test_resolve_telegram_bot_token_uses_secret_store() -> None:
     assert resolve_telegram_bot_token(state) == FAKE_TELEGRAM_BOT_TOKEN
 
 
+def test_resolve_telegram_bot_token_prefers_env_over_vault() -> None:
+    settings = AureySettings(
+        telegram_bot_token="env-telegram-token",
+        telegram_bot_token_secret_path="aurey/telegram/bot_token",
+    )
+    runtime = AureyRuntime(
+        settings=settings,
+        secret_store=FakeSecretStore({"aurey/telegram/bot_token": "vault-token"}),
+        evm_rpc_factory=rpc_factory_from_mapping({}),
+        http=ScriptedHttpClient(),
+        tx_pipeline=DeterministicTxPipeline(),
+    )
+    state = AureyServiceState(
+        settings=settings,
+        runtime=runtime,
+        checkpointer=make_memory_checkpointer(),
+        default_model="stub-model",
+    )
+    assert resolve_telegram_bot_token(state) == "env-telegram-token"
+
+
 def test_resolve_telegram_bot_token_missing_path_is_sanitized() -> None:
     state = _service_state_with_token(token_path=None, token=FAKE_TELEGRAM_BOT_TOKEN)
 

@@ -13,8 +13,8 @@ from web3 import Web3
 from web3.exceptions import TimeExhausted
 
 from aurey.custody import OneClawEvmTransactionSigner
-from aurey.custody.errors import SecretNotFoundError, SecretStoreUnavailableError
 from aurey.custody.secret_store import SecretStore
+from aurey.graphs.api_key_resolution import effective_alchemy_api_key
 from aurey.graphs.chains import alchemy_rpc_url_for_chain, chain_name_for_id
 from aurey.graphs.evm_codec import (
     erc20_allowance_calldata,
@@ -192,21 +192,21 @@ class Web3TxPipeline(TxPipelinePort):
                 tail,
             )
 
-        alchemy_path = (self._settings.alchemy_api_secret_path or "").strip()
-        if not alchemy_path:
-            raise RuntimeError(
-                "policy_rejected: alchemy_api_secret_path is required for transaction broadcast."
-            )
-
-        try:
-            api_key = self._secret_store.get_secret(alchemy_path).reveal().strip()
-        except SecretNotFoundError as exc:
-            raise RuntimeError("policy_rejected: Alchemy API key secret not found.") from exc
-        except SecretStoreUnavailableError as exc:
+        api_key, alchemy_err = effective_alchemy_api_key(self._settings, self._secret_store)
+        if alchemy_err is not None:
+            code = alchemy_err.get("code")
+            if code == "secret_not_configured":
+                raise RuntimeError(
+                    "policy_rejected: alchemy_api_secret_path is required for "
+                    "transaction broadcast."
+                )
+            if code == "secret_not_found":
+                raise RuntimeError("policy_rejected: Alchemy API key secret not found.")
             raise RuntimeError(
                 "policy_rejected: secret store unavailable while loading Alchemy API key."
-            ) from exc
+            )
 
+        api_key = (api_key or "").strip()
         if not api_key:
             raise RuntimeError("policy_rejected: Alchemy API key is empty.")
 

@@ -137,6 +137,26 @@ def test_run_prepared_success_with_mock_w3():
     mock_w3.eth.wait_for_transaction_receipt.assert_called_once()
 
 
+def test_run_prepared_success_with_alchemy_env_key_only():
+    signer = Account.create()
+    mock_w3 = _mock_w3_for_success()
+
+    pipeline = Web3TxPipeline(
+        settings=AureySettings(alchemy_api_key="test-alchemy-key"),
+        secret_store=FakeSecretStore({}),
+        web3_factory=lambda _url: mock_w3,
+        receipt_timeout_s=5.0,
+    )
+    env = _envelope(signer=signer)
+    key_hex = "0x" + signer.key.hex()
+
+    out = pipeline.run_prepared(env, signing_key_material_hex=key_hex)
+
+    assert out.tx_hash.startswith("0x")
+    assert len(out.tx_hash) == 66
+    assert out.receipt.status == 1
+
+
 def test_run_prepared_with_oneclaw_signer_success():
     acct = Account.create()
     mock_w3 = _mock_w3_for_success()
