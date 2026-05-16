@@ -565,17 +565,20 @@ class OnboardingService:
         if chains is not None:
             user_row.provisioned_signing_key_chains = chains
         try:
+            ok_payload = {
+                "connection_id": connection_id,
+                "vault_id": vault_id,
+                "agent_id": agent_id,
+                "signing_key_chain_count": len(chains) if chains else 0,
+            }
+            if chains:
+                ok_payload["signing_key_chains"] = chains
             self._apply_phase(
                 session,
                 user=user_row,
                 to_phase=OnboardingPhase.AWAITING_CLAIM,
                 event_type="platform_bootstrap_ok",
-                event_payload={
-                    "connection_id": connection_id,
-                    "vault_id": vault_id,
-                    "agent_id": agent_id,
-                    "signing_key_chain_count": len(chains) if chains else 0,
-                },
+                event_payload=ok_payload,
             )
         except InvalidOnboardingTransition as exc:
             _LOG.error("Bootstrap phase transition rejected: %s", exc)

@@ -157,7 +157,7 @@ Authorization: Bearer <your-1claw-user-token>
 
    → returns template_id
 
-   Optionally include **`signing_keys: { chains: [...] }`** in the template `spec` so chains
+   Optionally include **`signing_keys: [{ "chain": "ethereum" }, …]`** in the template `spec` so chains
    are provisioned as part of bootstrap / claim where the Platform API supports it; otherwise users
    can add chains later via `POST /v1/agents/{agent_id}/signing-keys`.
    Hosted Aurey persists `provisioned_signing_key_chains` from normalized `summary.signing_key_chains`

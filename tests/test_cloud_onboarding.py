@@ -191,6 +191,7 @@ def test_onboarding_bootstrap_persists_signing_key_chains_from_summary(monkeypat
         assert bootstrap_ev is not None
         assert bootstrap_ev.payload is not None
         assert bootstrap_ev.payload.get("signing_key_chain_count") == 2
+        assert bootstrap_ev.payload.get("signing_key_chains") == ["solana", "ethereum"]
     finally:
         session.close()
 

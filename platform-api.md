@@ -163,19 +163,18 @@ In the template spec, use `"intents": { "enabled": true }` (nested object). This
 
 ### `signing_keys`
 
-When present, declares which chains should receive signing keys **as part of the bootstrap / claim flow** (so users are not blocked on a separate provisioning step).
+When present, declares which chains should receive signing keys **as part of the bootstrap / claim flow** (so users are not blocked on a separate provisioning step). In the Platform API payload this is an **array** of `{ "chain": "<id>" }` objects (same `chain` field shape as `POST /v1/agents/{agent_id}/signing-keys`).
 
 
-| Field   | Type      | Description                                                                 |
-| ------- | --------- | ---------------------------------------------------------------------------- |
-| `chains` | `string[]` | Chain identifiers understood by the platform (e.g. `ethereum`, `solana`). |
+| Field    | Type   | Description                                                                     |
+| -------- | ------ | ------------------------------------------------------------------------------- |
+| `chain`  | string | Chain identifier understood by the platform (e.g. `ethereum`, `solana`). |
 
+Each array entry is one signing-key slot for that chain.
 
 ```json
 {
-  "signing_keys": {
-    "chains": ["ethereum", "solana"]
-  }
+  "signing_keys": [{ "chain": "ethereum" }, { "chain": "solana" }]
 }
 ```
 
@@ -293,10 +292,10 @@ Set `auth_mode` when creating your platform app:
 
 ## Current Limitations
 
-- **Signing keys in templates.** Use **`spec.signing_keys.chains`** to request per-chain signing keys during bootstrap where supported. Operators can always fall back to `POST /v1/agents/{agent_id}/signing-keys` with `{ "chain": "ethereum" }` for flows that omit template signing keys or need add-on chains later.
+- **Signing keys in templates.** Use **`signing_keys: [{ "chain": "ethereum" }, …]`** in the template `spec` to request per-chain signing keys during bootstrap where supported. Operators can always fall back to `POST /v1/agents/{agent_id}/signing-keys` with `{ "chain": "ethereum" }` for flows that omit template signing keys or need add-on chains later.
 - **Delegated token exchange** (RFC 8693 `DelegatedTokenRequest`) is defined but not yet wired. Platform operators cannot issue delegated JWTs on behalf of connected users.
 - **Silent mode** always returns a `claim_url`. For fully headless (no-browser) flows, the claim token can be used programmatically in a future release.
-- `**plt_` keys** can see user metadata but cannot directly access user signing keys (`GET /v1/agents/{id}/signing-keys`). The org boundary prevents cross-org reads. Use the user's agent token or wait for delegated tokens.
+- **`plt_` keys** can see user metadata but cannot directly access user signing keys (`GET /v1/agents/{id}/signing-keys`). The org boundary prevents cross-org reads. Use the user's agent token or wait for delegated tokens.
 
 ---
 
