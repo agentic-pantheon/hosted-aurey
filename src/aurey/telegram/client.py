@@ -34,6 +34,56 @@ def _telegram_chat_is_allowed(chat_id: int | None, allowed: frozenset[int] | Non
     return chat_id in allowed
 
 
+def _hosted_finish_claim_short_message() -> str:
+    return "Finish hosted setup first: open the claim link from /start, then message me again."
+
+
+def _hosted_user_must_finish_claim_message(
+    state: AureyServiceState,
+    *,
+    telegram_user_id: int,
+) -> str | None:
+    """Return reply text when the user is still awaiting claim (after a refresh attempt).
+
+    ``None`` means normal agent invoke should proceed.
+    """
+
+    cfg = state.settings
+    if not cfg.hosted_platform_enabled:
+        return None
+    if not (cfg.database_url or "").strip():
+        return None
+    factory = state.hosted_session_factory
+    if factory is None:
+        return None
+
+    from aurey.cloud.onboarding_refresh import refresh_hosted_user_claim_state
+    from aurey.cloud.platform_client import HostedPlatformApiError, OneClawPlatformClient
+
+    db = factory()
+    try:
+        platform = OneClawPlatformClient.from_settings(cfg)
+        row = refresh_hosted_user_claim_state(db, cfg, platform, telegram_user_id)
+        db.commit()
+    except HostedPlatformApiError:
+        db.rollback()
+        return (
+            "Could not verify hosted setup yet—try again in a moment, or use /start for your "
+            "claim link."
+        )
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+    if row is None:
+        return None
+    if (row.onboarding_state or "").strip() == "awaiting_claim":
+        return _hosted_finish_claim_short_message()
+    return None
+
+
 _TELEGRAM_MAX_MESSAGE_CHARS = 4096
 _TELEGRAM_CHUNK_TARGET_CHARS = 3600
 _TELEGRAM_TYPING_REFRESH_SEC = 4.0
@@ -41,9 +91,7 @@ _TELEGRAM_STATUS_EDIT_THROTTLE_SEC = 1.25
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _HEX_INLINE_BACKTICK_RE = re.compile(r"`(0x(?:[a-fA-F0-9]{64}|[a-fA-F0-9]{40}))`")
-_SKIP_ANCHORS_AND_CODE_RE = re.compile(
-    r"(<code>[\s\S]*?</code>|<a\b[^>]*>[\s\S]*?</a>)"
-)
+_SKIP_ANCHORS_AND_CODE_RE = re.compile(r"(<code>[\s\S]*?</code>|<a\b[^>]*>[\s\S]*?</a>)")
 _TX_HASH_RE = re.compile(r"\b(0x[a-fA-F0-9]{64})\b")
 _ADDRESS_RE = re.compile(r"\b(0x[a-fA-F0-9]{40})\b")
 
@@ -82,9 +130,7 @@ def _explicit_explorer_base_for_line(line: str) -> str | None:
         return _CHAIN_EXPLORER_BY_ID[int(ms.group(1))]
     keyword_rules: list[tuple[re.Pattern[str], str]] = [
         (
-            re.compile(
-                r"(?i)\b(?:base(?:\s+mainnet|\s+l2|\s+l2:?)?|\bon\s+base\b)(?!\s*i/o)"
-            ),
+            re.compile(r"(?i)\b(?:base(?:\s+mainnet|\s+l2|\s+l2:?)?|\bon\s+base\b)(?!\s*i/o)"),
             _CHAIN_EXPLORER_BY_ID[8453],
         ),
         (re.compile(r"(?i)\b(?:usdc\s+on\s+base\b)"), _CHAIN_EXPLORER_BY_ID[8453]),
@@ -351,8 +397,7 @@ def _import_telegram_ext():
         from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise RuntimeError(
-            "Telegram support requires the optional 'telegram' extra: "
-            "pip install -e '.[telegram]'"
+            "Telegram support requires the optional 'telegram' extra: pip install -e '.[telegram]'"
         ) from exc
     return Application, CommandHandler, ContextTypes, MessageHandler, Update, filters
 
@@ -391,6 +436,7 @@ def build_telegram_application(
         cfg = state.settings
         db_url = (cfg.database_url or "").strip()
         if cfg.hosted_platform_enabled and db_url and state.hosted_session_factory is not None:
+            from aurey.cloud.onboarding_refresh import refresh_hosted_user_claim_state
             from aurey.cloud.platform_client import (
                 HostedPlatformApiError,
                 OneClawPlatformClient,
@@ -408,7 +454,7 @@ def build_telegram_application(
             telegram_user_id = int(tid_raw)
             telegram_username = getattr(tg_user, "username", None)
 
-            def _provision_sync() -> str:
+            def _provision_sync() -> tuple[str, str]:
                 factory = state.hosted_session_factory
                 if factory is None:
                     raise RuntimeError("hosted_session_factory is not configured.")
@@ -422,8 +468,15 @@ def build_telegram_application(
                         telegram_user_id=telegram_user_id,
                         username=telegram_username,
                     )
+                    try:
+                        refresh_hosted_user_claim_state(db, cfg, platform, row)
+                    except HostedPlatformApiError:
+                        gate_log.warning(
+                            "Hosted claim refresh failed after /start provision",
+                            exc_info=True,
+                        )
                     db.commit()
-                    return row.claim_url
+                    return row.claim_url, (row.onboarding_state or "").strip()
                 except Exception:
                     db.rollback()
                     raise
@@ -431,7 +484,7 @@ def build_telegram_application(
                     db.close()
 
             try:
-                claim_url = await asyncio.to_thread(_provision_sync)
+                claim_url, onboard = await asyncio.to_thread(_provision_sync)
             except HostedProvisioningError as exc:
                 await msg.reply_text(f"Hosted setup failed (configuration): {exc}")
                 return
@@ -441,6 +494,14 @@ def build_telegram_application(
             except Exception:
                 gate_log.exception("Telegram hosted provisioning failed")
                 await msg.reply_text("Hosted setup failed; see service logs for details.")
+                return
+
+            if onboard == "ready":
+                await msg.reply_text(
+                    "<b>Hosted Aurey</b>\nYou're all set — send a message to invoke the agent.",
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
                 return
 
             safe_url = html.escape(claim_url.strip(), quote=False)
@@ -467,6 +528,17 @@ def build_telegram_application(
             gate_log.debug("Telegram message ignored (disallowed chat_id=%r)", chat_id_raw)
             return
         chat_id_for_session = chat_id_raw if chat_id_raw is not None else "unknown"
+
+        tid_for_gate = getattr(user, "id", None)
+        if tid_for_gate is not None:
+            block = await asyncio.to_thread(
+                _hosted_user_must_finish_claim_message,
+                state,
+                telegram_user_id=int(tid_for_gate),
+            )
+            if block is not None:
+                await msg.reply_text(block)
+                return
 
         if chat_id_raw is None:
             reply = await asyncio.to_thread(

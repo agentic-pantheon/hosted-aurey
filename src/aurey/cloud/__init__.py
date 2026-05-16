@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from aurey.cloud.models import Base, HostedPlatformUserORM
+from aurey.cloud.onboarding_refresh import refresh_hosted_user_claim_state
 from aurey.cloud.platform_client import (
     HostedPlatformApiError,
     OneClawPlatformClient,
@@ -24,6 +25,7 @@ __all__ = [
     "OneClawPlatformClient",
     "PlatformBootstrapResult",
     "PlatformUpsertResult",
+    "refresh_hosted_user_claim_state",
     "ensure_telegram_user_provisioned",
     "make_engine",
     "make_session_factory",

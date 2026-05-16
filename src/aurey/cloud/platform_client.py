@@ -154,6 +154,50 @@ class OneClawPlatformClient:
         except json.JSONDecodeError as exc:
             raise HostedPlatformApiError("Platform response was not valid JSON.") from exc
 
+    def _get_json(self, path_suffix: str) -> Any:
+        url = f"{self._base_url}/{path_suffix.lstrip('/')}"
+        request = Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+            },
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=self._timeout_s) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as exc:
+            snippet = _http_error_snippet(exc, max_len=800)
+            _log.warning(
+                "Platform GET failed HTTP %s url=%s response_preview=%s",
+                exc.code,
+                url,
+                snippet[:240],
+            )
+            raise HostedPlatformApiError(
+                f"Platform HTTP {exc.code} for GET {path_suffix} (response preview truncated)."
+            ) from exc
+        except (OSError, URLError) as exc:
+            _log.warning("Platform GET network error url=%s detail=%s", url, type(exc).__name__)
+            raise HostedPlatformApiError(
+                f"Platform request failed for GET {path_suffix} ({exc})."
+            ) from exc
+        try:
+            return json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError as exc:
+            raise HostedPlatformApiError("Platform GET response was not valid JSON.") from exc
+
+    def get_connection(self, connection_id: str) -> dict[str, Any]:
+        """GET ``/v1/platform/connections/{connection_id}``; returns parsed JSON object."""
+
+        cid = (connection_id or "").strip()
+        if not cid:
+            raise ValueError("connection_id must not be empty.")
+        payload = self._get_json(f"v1/platform/connections/{cid}")
+        if not isinstance(payload, dict):
+            raise HostedPlatformApiError("Platform connection response must be a JSON object.")
+        return payload
+
     def upsert_user_synthetic_email(
         self,
         *,
