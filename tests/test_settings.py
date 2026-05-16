@@ -26,6 +26,16 @@ def test_settings_defaults():
     assert s.deep_agent_default_model == "openai:gpt-4o-mini"
     assert s.database_url is None
     assert s.oneclaw_agent_token_expiry_skew_seconds == 60.0
+    assert s.oneclaw_delegated_token_scope == "1claw:intents:delegated"
+    assert s.platform_app_id is None
+    assert s.platform_api_key is None
+    assert s.platform_template_id == ""
+    assert s.operator_vault_id == ""
+    assert s.operator_agent_id is None
+    assert s.operator_agent_api_key_secret_source == "AUREY_OPERATOR_AGENT_API_KEY"
+    assert s.hosted_oidc_issuer_url is None
+    assert s.hosted_oidc_audience is None
+    assert s.hosted_oidc_subject_token_ttl_seconds == 300
 
 
 def test_settings_env_override(monkeypatch):
@@ -127,8 +137,21 @@ def test_settings_telegram_allowed_chat_ids_invalid(monkeypatch) -> None:
         AureySettings(telegram_allowed_chat_ids="1,bogus")
 
 
-def test_settings_telegram_allowed_chat_ids_env(monkeypatch) -> None:
-    monkeypatch.delenv("AUREY_TELEGRAM_ALLOWED_CHAT_IDS", raising=False)
-    monkeypatch.setenv("AUREY_TELEGRAM_ALLOWED_CHAT_IDS", "7,-8")
+def test_settings_platform_api_key_from_env(monkeypatch):
+    monkeypatch.delenv("AUREY_PLATFORM_API_KEY", raising=False)
+    monkeypatch.setenv("AUREY_PLATFORM_API_KEY", "plt_test_fake")
     s = AureySettings()
-    assert s.telegram_allowed_chat_id_allowlist == frozenset({7, -8})
+    assert s.platform_api_key == "plt_test_fake"
+
+
+def test_resolve_operator_agent_api_key(monkeypatch):
+    monkeypatch.setenv("CUSTOM_OP_KEY", "ocv_test_fake")
+    s = AureySettings(operator_agent_api_key_secret_source="CUSTOM_OP_KEY")
+    assert s.resolve_operator_agent_api_key() == "ocv_test_fake"
+
+
+def test_resolve_operator_agent_api_key_missing(monkeypatch):
+    monkeypatch.delenv("MISSING_OP", raising=False)
+    s = AureySettings(operator_agent_api_key_secret_source="MISSING_OP")
+    with pytest.raises(KeyError):
+        s.resolve_operator_agent_api_key()

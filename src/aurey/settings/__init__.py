@@ -82,6 +82,72 @@ class AureySettings(BaseSettings):
             "when expiry is known)."
         ),
     )
+    oneclaw_delegated_token_scope: str = Field(
+        default="1claw:intents:delegated",
+        description=(
+            "OAuth-style scope string for 1Claw intents delegation / hosted token flows; "
+            "adjust to match your Platform app and security policy."
+        ),
+    )
+
+    platform_app_id: str | None = Field(
+        default=None,
+        description=(
+            "Optional Platform app identifier (for API paths, metrics, and logging). "
+            "Unset when not wired to the 1Claw Platform API."
+        ),
+    )
+    platform_api_key: str | None = Field(
+        default=None,
+        description=(
+            "Hosted Platform API key value (``plt_…``). Supply via ``AUREY_PLATFORM_API_KEY`` "
+            "(see ``validation_alias``)."
+        ),
+        validation_alias=AliasChoices("AUREY_PLATFORM_API_KEY"),
+    )
+    platform_template_id: str = Field(
+        default="",
+        description=(
+            "Platform provisioning template id (from bootstrap / operator setup). "
+            "Empty until a template is registered."
+        ),
+    )
+    operator_vault_id: str = Field(
+        default="",
+        description=(
+            "1Claw vault id the operator / agent runtime uses for secret reads "
+            "(``ocv_`` context). Leave empty until provisioned."
+        ),
+    )
+    operator_agent_id: str | None = Field(
+        default=None,
+        description="Optional operator agent id in 1Claw (hosted control plane).",
+    )
+    operator_agent_api_key_secret_source: str = Field(
+        default="AUREY_OPERATOR_AGENT_API_KEY",
+        description=(
+            "Name of the environment variable whose **value** is the operator agent API key "
+            "(``ocv_…`` or bootstrap-style key), same indirection pattern as "
+            "``oneclaw_api_key_secret_source``. Never commit the key; set the named env only."
+        ),
+    )
+
+    hosted_oidc_issuer_url: str | None = Field(
+        default=None,
+        description="Phase B: OIDC issuer URL for hosted user flows (optional).",
+    )
+    hosted_oidc_audience: str | None = Field(
+        default=None,
+        description="Phase B: OIDC audience for hosted tokens (optional).",
+    )
+    hosted_oidc_subject_token_ttl_seconds: int = Field(
+        default=300,
+        ge=1,
+        description=(
+            "Phase B: suggested TTL (seconds) in user-facing docs for subject / session-token "
+            "freshness; not enforced by this settings model alone."
+        ),
+    )
 
     alchemy_api_secret_path: str | None = Field(
         default=None,
@@ -177,6 +243,20 @@ class AureySettings(BaseSettings):
         name = self.oneclaw_api_key_secret_source.strip()
         if not name:
             raise ValueError("oneclaw_api_key_secret_source must not be empty.")
+        raw = os.environ.get(name)
+        if raw is None:
+            raise KeyError(name)
+        value = raw.strip()
+        if not value:
+            raise ValueError(f"Environment variable {name!r} is set but empty.")
+        return value
+
+    def resolve_operator_agent_api_key(self) -> str:
+        """Return operator agent API key from the env named by ``operator_agent_api_key_secret_source``."""
+
+        name = self.operator_agent_api_key_secret_source.strip()
+        if not name:
+            raise ValueError("operator_agent_api_key_secret_source must not be empty.")
         raw = os.environ.get(name)
         if raw is None:
             raise KeyError(name)
