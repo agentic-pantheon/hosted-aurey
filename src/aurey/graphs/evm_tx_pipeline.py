@@ -41,7 +41,8 @@ def _lifi_swap_simulation_hint_suffix(exc: BaseException) -> str:
             " Hint: For ERC-20 sells, ensure allowance: call swap_prepare and use "
             "`allowance` → tx_prepare_erc20_approval → tx_execute, then run the swap tx "
             "(refresh quote if the first swap simulation fails after approval). "
-            "See `error.details` when present for on-chain allowance/balance vs the quoted sell amount."
+            "See `error.details` when present for on-chain allowance/balance vs the quoted "
+            "sell amount."
         )
     if "hex" in low or "hex string" in low:
         return (
@@ -77,8 +78,8 @@ def _lifi_transfer_from_simulation_details(
     spender = envelope.lifi_approval_spender
     if not sell or not spender:
         details["note"] = (
-            "Envelope lacks LiFi sell-token metadata (prepare via swap_prepare / earn_prepare_deposit "
-            "so allowance_context is attached)."
+            "Envelope lacks LiFi sell-token metadata (prepare via swap_prepare / "
+            "earn_prepare_deposit so allowance_context is attached)."
         )
         return details
     try:
@@ -376,6 +377,7 @@ class Web3TxPipeline(TxPipelinePort):
         signer: OneClawEvmTransactionSigner,
         *,
         agent_id: str,
+        authorization_bearer: str | None = None,
     ) -> TxExecuteResult:
         if envelope.kind == "lifi_swap":
             SWAP_LOG.info(
@@ -394,6 +396,7 @@ class Web3TxPipeline(TxPipelinePort):
                 chain=prepared.chain_name,
                 transaction=prepared.tx_body,
                 signing_key_path=signing_key_path,
+                authorization_bearer=authorization_bearer,
             )
         except Exception as exc:
             raise RuntimeError(f"policy_rejected: transaction signing failed ({exc}).") from exc

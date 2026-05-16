@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal, TypedDict
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
+from aurey.cloud.signing_context import current_hosted_signing_context
 from aurey.graphs.chains import chain_id_for, chain_info
 from aurey.graphs.ens_eth import is_zero_address
 from aurey.graphs.evm_codec import erc20_approve_data, erc20_transfer_data, normalize_evm_address
@@ -16,6 +17,11 @@ from aurey.runtime import AureyRuntime
 
 def _evm_prepare_signing_settings_error(runtime: AureyRuntime) -> dict[str, Any] | None:
     settings = runtime.settings
+    if settings.hosted_platform_enabled and settings.evm_signing_mode == "vault_key":
+        return GraphErrorBody(
+            code="secret_not_supported",
+            message="Vault key signing is not supported when hosted_platform_enabled is true.",
+        ).model_dump()
     if settings.evm_signing_requires_wallet_signing_key_secret_path:
         path = settings.wallet_signing_key_secret_path
         if path is None or not str(path).strip():
@@ -24,14 +30,28 @@ def _evm_prepare_signing_settings_error(runtime: AureyRuntime) -> dict[str, Any]
                 message="Wallet signing key secret path is not configured.",
             ).model_dump()
     if settings.evm_signing_mode == "oneclaw_intents":
-        agent_id = settings.oneclaw_agent_id
-        if agent_id is None or not str(agent_id).strip():
-            return GraphErrorBody(
-                code="secret_not_configured",
-                message=(
-                    "oneclaw_agent_id must be configured when evm_signing_mode is oneclaw_intents."
-                ),
-            ).model_dump()
+        ctx = current_hosted_signing_context.get()
+        if settings.hosted_platform_enabled and ctx is not None:
+            uid = (ctx.user_agent_id or "").strip()
+            tok = (ctx.delegation_subject_token or "").strip()
+            if not uid or not tok:
+                return GraphErrorBody(
+                    code="secret_not_configured",
+                    message=(
+                        "Hosted oneclaw_intents requires user_agent_id and delegation "
+                        "subject token (provision the user and run /delegation_grant)."
+                    ),
+                ).model_dump()
+        else:
+            agent_id = settings.oneclaw_agent_id
+            if agent_id is None or not str(agent_id).strip():
+                return GraphErrorBody(
+                    code="secret_not_configured",
+                    message=(
+                        "oneclaw_agent_id must be configured when evm_signing_mode is "
+                        "oneclaw_intents."
+                    ),
+                ).model_dump()
     return None
 
 

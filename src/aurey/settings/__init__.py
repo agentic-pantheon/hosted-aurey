@@ -140,6 +140,15 @@ class AureySettings(BaseSettings):
             "Requires a configured Postgres ``database_url``."
         ),
     )
+    hosted_admin_telegram_user_ids: str | None = Field(
+        default=None,
+        description=(
+            "Comma- or whitespace-separated Telegram **user** ids allowed to run "
+            "``/grant`` / ``/delegation_grant`` (delegation subject token persistence). "
+            "Unset or empty disables the grant command. "
+            "**Staging only:** tokens are stored in plaintext in the DB."
+        ),
+    )
     hosted_synthetic_email_domain: str = Field(
         default="hosted-aurey.local",
         description=(
@@ -249,11 +258,28 @@ class AureySettings(BaseSettings):
         parse_telegram_allowed_chat_ids(stripped)
         return stripped
 
+    @field_validator("hosted_admin_telegram_user_ids")
+    @classmethod
+    def _hosted_admin_telegram_user_ids_syntax(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            return None
+        parse_telegram_allowed_chat_ids(stripped)
+        return stripped
+
     @property
     def telegram_allowed_chat_id_allowlist(self) -> frozenset[int] | None:
         """Frozen set of allowed chat ids, or ``None`` when the bot accepts any chat."""
 
         return parse_telegram_allowed_chat_ids(self.telegram_allowed_chat_ids)
+
+    @property
+    def hosted_admin_telegram_user_id_allowlist(self) -> frozenset[int] | None:
+        """Admins allowed to persist delegation tokens; ``None`` when unset (same as empty)."""
+
+        return parse_telegram_allowed_chat_ids(self.hosted_admin_telegram_user_ids)
 
     @property
     def evm_signing_requires_wallet_signing_key_secret_path(self) -> bool:

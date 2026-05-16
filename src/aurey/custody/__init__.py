@@ -18,10 +18,12 @@ from aurey.custody.secret_store import (
     OneClawSignTransactionResult,
     SecretStore,
     SecretValue,
+    delegated_subject_fingerprint,
 )
 
 __all__ = [
     "CustodyError",
+    "delegated_subject_fingerprint",
     "EmptySecretValueError",
     "FakeOneClawClient",
     "FakeSecretStore",

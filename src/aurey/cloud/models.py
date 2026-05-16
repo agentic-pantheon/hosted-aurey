@@ -35,6 +35,7 @@ class HostedPlatformUserORM(Base):
     )
     vault_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     user_agent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    delegation_subject_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     wallet_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

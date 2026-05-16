@@ -10,6 +10,10 @@ from langchain_core.messages import HumanMessage
 from openai import APIConnectionError, APITimeoutError
 from pydantic import BaseModel
 
+from aurey.cloud.signing_context import (
+    HostedSigningContext,
+    hosted_signing_context_scope,
+)
 from aurey.reasoning import thread_config
 from aurey.service.agent_trace import build_agent_trace_handler, format_exception_chain
 from aurey.service.message_content import (
@@ -113,8 +117,13 @@ def invoke_deep_agent_turn(
     context: dict[str, Any] | None = None,
     model: str | None = None,
     extra_callbacks: list[Any] | None = None,
+    hosted_signing_context: HostedSigningContext | None = None,
 ) -> AgentInvokeResult:
-    """Invoke the shared deep-agent graph with sanitized error responses."""
+    """Invoke the shared deep-agent graph with sanitized error responses.
+
+    ``hosted_signing_context`` is optional: bind per-user 1Claw delegation (Telegram-hosted).
+    The HTTP ``POST /v1/invoke`` entrypoint typically omits it (MVP).
+    """
 
     _log.info(
         "incoming  %s",
@@ -186,9 +195,15 @@ def invoke_deep_agent_turn(
         )
 
     try:
-        result = _invoke_graph_with_transient_retries(
-            graph, message=message, config=config
-        )
+        if hosted_signing_context is not None:
+            with hosted_signing_context_scope(hosted_signing_context):
+                result = _invoke_graph_with_transient_retries(
+                    graph, message=message, config=config
+                )
+        else:
+            result = _invoke_graph_with_transient_retries(
+                graph, message=message, config=config
+            )
     except Exception as exc:
         _log.warning(
             "agent invoke failed after retries  session=%s  detail=%s",
@@ -239,6 +254,7 @@ def invoke_deep_agent_turn(
 __all__ = [
     "AgentInvokeError",
     "AgentInvokeResult",
+    "HostedSigningContext",
     "flatten_message_content",
     "invoke_deep_agent_turn",
     "summarize_agent_messages",

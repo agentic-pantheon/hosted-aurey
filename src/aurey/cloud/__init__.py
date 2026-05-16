@@ -16,10 +16,16 @@ from aurey.cloud.provision import (
     synthetic_email_for_telegram_user,
 )
 from aurey.cloud.session import make_engine, make_session_factory
+from aurey.cloud.signing_context import (
+    HostedSigningContext,
+    current_hosted_signing_context,
+    hosted_signing_context_scope,
+)
 
 __all__ = [
     "Base",
     "HostedPlatformApiError",
+    "HostedSigningContext",
     "HostedPlatformUserORM",
     "HostedProvisioningError",
     "OneClawPlatformClient",
@@ -29,5 +35,7 @@ __all__ = [
     "ensure_telegram_user_provisioned",
     "make_engine",
     "make_session_factory",
+    "current_hosted_signing_context",
+    "hosted_signing_context_scope",
     "synthetic_email_for_telegram_user",
 ]

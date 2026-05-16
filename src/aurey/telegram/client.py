@@ -12,6 +12,7 @@ from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
 
+from aurey.cloud.signing_context import HostedSigningContext
 from aurey.custody.errors import SecretNotFoundError, SecretStoreUnavailableError
 from aurey.service.bootstrap import bootstrap_aurey_service_state
 from aurey.service.invoke import AgentInvokeResult, invoke_deep_agent_turn
@@ -356,6 +357,45 @@ class TelegramInvokeProgressCallback(BaseCallbackHandler):
         self._sink("Gathering details…")
 
 
+def hosted_signing_context_for_telegram_user(
+    state: AureyServiceState,
+    *,
+    telegram_user_id: int | str | None,
+) -> HostedSigningContext | None:
+    """Load hosted DB row for a ready Telegram user (delegation + user agent id)."""
+
+    if telegram_user_id is None:
+        return None
+    cfg = state.settings
+    if not cfg.hosted_platform_enabled:
+        return None
+    factory = state.hosted_session_factory
+    if factory is None:
+        return None
+
+    from sqlalchemy import select
+
+    from aurey.cloud.models import HostedPlatformUserORM
+
+    tid = int(telegram_user_id)
+    db = factory()
+    try:
+        row = db.execute(
+            select(HostedPlatformUserORM).where(HostedPlatformUserORM.telegram_user_id == tid),
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        if (row.onboarding_state or "").strip() != "ready":
+            return None
+        return HostedSigningContext(
+            telegram_user_id=tid,
+            user_agent_id=(row.user_agent_id or "").strip(),
+            delegation_subject_token=(row.delegation_subject_token or "").strip(),
+        )
+    finally:
+        db.close()
+
+
 def _last_text_message(result: AgentInvokeResult) -> str:
     text = reply_preview_from_summary(result.messages)
     return text if text else "Done."
@@ -376,6 +416,10 @@ def handle_telegram_text(
     context: dict[str, Any] = {"telegram_chat_id": str(chat_id)}
     if user_id is not None:
         context["telegram_user_id"] = str(user_id)
+    signing_ctx = hosted_signing_context_for_telegram_user(
+        state,
+        telegram_user_id=user_id,
+    )
     extras = [TelegramInvokeProgressCallback(progress_sink)] if progress_sink is not None else None
     result = invoke_deep_agent_turn(
         state,
@@ -384,6 +428,7 @@ def handle_telegram_text(
         context=context,
         model=model,
         extra_callbacks=extras,
+        hosted_signing_context=signing_ctx,
     )
     if result.ok:
         return _last_text_message(result)
@@ -515,6 +560,94 @@ def build_telegram_application(
             return
 
         await msg.reply_text("Aurey is ready. Send a message to invoke the agent.")
+
+    async def delegation_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Persist a delegation subject token for a hosted user (**staging**: plaintext DB)."""
+
+        msg = update.effective_message
+        if msg is None:
+            return
+        cfg = state.settings
+        if not cfg.hosted_platform_enabled:
+            return
+        db_url = (cfg.database_url or "").strip()
+        if not db_url or state.hosted_session_factory is None:
+            await msg.reply_text("Hosted database is not configured.")
+            return
+        admins = cfg.hosted_admin_telegram_user_id_allowlist
+        if not admins:
+            await msg.reply_text(
+                "Delegation grant is disabled (set AUREY_HOSTED_ADMIN_TELEGRAM_USER_IDS)."
+            )
+            return
+        actor = update.effective_user
+        if actor is None or actor.id not in admins:
+            await msg.reply_text("You are not authorized to grant delegation tokens.")
+            return
+
+        args: list[str] = list(context.args) if context.args else []
+        reply = msg.reply_to_message
+        target_id: int | None = None
+        token = ""
+        if reply is not None and reply.from_user is not None:
+            target_id = int(reply.from_user.id)
+            token = " ".join(args).strip()
+        elif len(args) >= 2:
+            try:
+                target_id = int(args[0])
+            except ValueError:
+                await msg.reply_text("telegram_user_id must be an integer.")
+                return
+            token = " ".join(args[1:]).strip()
+        else:
+            await msg.reply_text(
+                "Usage: reply to a user with /delegation_grant <subject_token>, or "
+                "/delegation_grant <telegram_user_id> <subject_token>.\n\n"
+                "Staging warning: tokens are stored in plaintext in the database."
+            )
+            return
+        if not token:
+            await msg.reply_text("Missing subject token.")
+            return
+        assert target_id is not None
+
+        from sqlalchemy import select
+
+        from aurey.cloud.models import HostedPlatformUserORM
+
+        def _persist() -> str:
+            factory = state.hosted_session_factory
+            assert factory is not None
+            session = factory()
+            try:
+                row = session.execute(
+                    select(HostedPlatformUserORM).where(
+                        HostedPlatformUserORM.telegram_user_id == target_id,
+                    ),
+                ).scalar_one_or_none()
+                if row is None:
+                    return "missing"
+                row.delegation_subject_token = token
+                session.commit()
+                return "ok"
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        try:
+            outcome = await asyncio.to_thread(_persist)
+        except Exception:
+            gate_log.exception("delegation_grant persistence failed")
+            await msg.reply_text("Could not save token; see logs.")
+            return
+        if outcome == "missing":
+            await msg.reply_text("No hosted_platform_users row for that Telegram user id.")
+            return
+        await msg.reply_text(
+            "Delegation subject token saved (staging only — stored as plaintext in the database)."
+        )
 
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         msg = update.effective_message
@@ -670,6 +803,8 @@ def build_telegram_application(
 
     app = Application.builder().token(bot_token).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("grant", delegation_grant))
+    app.add_handler(CommandHandler("delegation_grant", delegation_grant))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
 
     _telegram_log = logging.getLogger("aurey.telegram.bot")
@@ -710,6 +845,7 @@ __all__ = [
     "create_telegram_application",
     "format_telegram_message",
     "handle_telegram_text",
+    "hosted_signing_context_for_telegram_user",
     "resolve_telegram_bot_token",
     "telegram_message_chunks",
 ]

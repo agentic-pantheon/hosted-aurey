@@ -314,3 +314,85 @@ def test_oneclaw_http_get_secret_refetches_token_after_expires_in_window():
     assert auth1 == "Bearer jwt-old"
     assert auth3 == "Bearer jwt-new"
     assert mono.call_count == 3
+
+
+def test_oneclaw_http_sign_skips_agent_token_when_authorization_bearer_set():
+    captured: list[Request] = []
+    actions = [
+        json.dumps(
+            {
+                "signed_tx": "0xdead",
+                "tx_hash": "0xhash",
+                "from": "0xfrom",
+                "tx_type": "2",
+            }
+        ).encode(),
+    ]
+    with patch(
+        "aurey.custody.secret_store.urlopen",
+        side_effect=_make_urlopen_mock(actions, captured),
+    ):
+        client = OneClawHttpClient(base_url="https://claw.test", api_key="k")
+        out = client.sign_evm_transaction(
+            agent_id="my-agent",
+            chain="ethereum",
+            transaction=dict(_MIN_WEB3_EIP1559_TX),
+            authorization_bearer="preissued-jwt",
+        )
+
+    assert out.signed_tx == "0xdead"
+    assert len(captured) == 1
+    assert captured[0].get_full_url() == "https://claw.test/v1/agents/my-agent/sign"
+    auth = next(v for h, v in captured[0].header_items() if h.lower() == "authorization")
+    assert auth == "Bearer preissued-jwt"
+
+
+def test_oneclaw_http_post_delegated_token_caches_per_subject_fingerprint_and_agent():
+    captured: list[Request] = []
+    subject = "subject-secret-token"
+    actions = [
+        json.dumps({"access_token": "jwt-d1", "expires_in": 3600}).encode(),
+        json.dumps({"access_token": "jwt-d2", "expires_in": 3600}).encode(),
+    ]
+    mono = MagicMock(return_value=1000.0)
+    with (
+        patch(
+            "aurey.custody.secret_store.urlopen",
+            side_effect=_make_urlopen_mock(actions, captured),
+        ),
+        patch("aurey.custody.secret_store.time.monotonic", mono),
+    ):
+        client = OneClawHttpClient(
+            base_url="https://claw.test",
+            api_key="k",
+            agent_token_expiry_skew_seconds=60.0,
+        )
+        t1 = client.post_delegated_access_token(
+            actor_token="act",
+            subject_token=subject,
+            scope="scopes/x",
+            agent_id="ag1",
+        )
+        t2 = client.post_delegated_access_token(
+            actor_token="act",
+            subject_token=subject,
+            scope="scopes/x",
+            agent_id="ag1",
+        )
+        t3 = client.post_delegated_access_token(
+            actor_token="act",
+            subject_token=subject,
+            scope="scopes/x",
+            agent_id="ag2",
+        )
+
+    assert t1 == t2 == "jwt-d1"
+    assert t3 == "jwt-d2"
+    assert len(captured) == 2
+    assert all(r.get_full_url() == "https://claw.test/v1/auth/delegated-token" for r in captured)
+    body0 = json.loads(captured[0].data.decode())
+    assert body0 == {
+        "subject_token": subject,
+        "actor_token": "act",
+        "scope": "scopes/x",
+    }

@@ -6,6 +6,7 @@ from aurey.telegram.client import (
     create_telegram_application,
     format_telegram_message,
     handle_telegram_text,
+    hosted_signing_context_for_telegram_user,
     resolve_telegram_bot_token,
     telegram_message_chunks,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "create_telegram_application",
     "format_telegram_message",
     "handle_telegram_text",
+    "hosted_signing_context_for_telegram_user",
     "resolve_telegram_bot_token",
     "telegram_message_chunks",
 ]
