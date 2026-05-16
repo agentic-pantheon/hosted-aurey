@@ -50,3 +50,18 @@ Treat these as documentation-oriented defaults until the hosted auth path is imp
 
 - Platform API and console: [https://docs.1claw.xyz](https://docs.1claw.xyz)
 - Aurey env reference: repository root `.env.example`
+
+## 7. Operator API keys via environment
+
+Hosted deployments usually set plaintext operator keys (preferred over vault paths when both are configured):
+
+- `AUREY_ALCHEMY_API_KEY`
+- `AUREY_LIFI_API_KEY` (optional)
+- `AUREY_TELEGRAM_BOT_TOKEN`
+
+See [.env.example](../.env.example) and [`api_key_resolution`](../src/aurey/graphs/api_key_resolution.py).
+
+## 8. Delegation grant (staging)
+
+Delegated signing depends on storing a Platform **user grant** subject token (`delegation_subject_token` on `hosted_platform_users`). Telegram `/grant` and `/delegation_grant` persist this when `AUREY_HOSTED_ADMIN_TELEGRAM_USER_IDS` lists your numeric user id.
+Treat plaintext storage as **staging only**; replace with KMS or vault-managed references before production.
