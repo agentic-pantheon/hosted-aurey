@@ -60,12 +60,17 @@ _CHAIN_EXPLORER_BY_ID: dict[int, str] = {
     43114: "https://snowtrace.io",
 }
 
-_CHAIN_ID_HINT_RE = re.compile(r"(?i)\bchain(?:\s+i?d|\s+#)?\s*(?:[:=]|is)\s*(?:(?:#|=\s*|id\s+)\s*)?(\d+)\b")
+_CHAIN_ID_HINT_RE = re.compile(
+    r"(?i)\bchain(?:\s+i?d|\s+#)?\s*(?:[:=]|is)\s*(?:(?:#|=\s*|id\s+)\s*)?(\d+)\b"
+)
 _STANDALONE_CHAIN_ID_RE = re.compile(r"\b(8453|42161|59144|534352|43114)\b")
 
 
 def _explicit_explorer_base_for_line(line: str) -> str | None:
-    """Return explorer URL when ``line`` signals a chain; ``None`` to inherit sticky paragraph context."""
+    """Return explorer URL when ``line`` signals a chain.
+
+    ``None`` means inherit sticky paragraph context.
+    """
 
     m = _CHAIN_ID_HINT_RE.search(line)
     if m is not None:
@@ -76,12 +81,31 @@ def _explicit_explorer_base_for_line(line: str) -> str | None:
     if ms is not None:
         return _CHAIN_EXPLORER_BY_ID[int(ms.group(1))]
     keyword_rules: list[tuple[re.Pattern[str], str]] = [
-        (re.compile(r"(?i)\b(?:base(?:\s+mainnet|\s+l2|\s+l2:?)?|\bon\s+base\b)(?!\s*i/o)"), _CHAIN_EXPLORER_BY_ID[8453]),
+        (
+            re.compile(
+                r"(?i)\b(?:base(?:\s+mainnet|\s+l2|\s+l2:?)?|\bon\s+base\b)(?!\s*i/o)"
+            ),
+            _CHAIN_EXPLORER_BY_ID[8453],
+        ),
         (re.compile(r"(?i)\b(?:usdc\s+on\s+base\b)"), _CHAIN_EXPLORER_BY_ID[8453]),
-        (re.compile(r"(?i)\b(?:arbitrum|arb\s+(?:mainnet|one))\b|\b42161\b"), _CHAIN_EXPLORER_BY_ID[42161]),
-        (re.compile(r"(?i)\b(?:optimism|op\s+(?:chain|stack|mainnet))\b"), _CHAIN_EXPLORER_BY_ID[10]),
-        (re.compile(r"(?i)\bpolygon\b|\b(?:matic\b)\s+(?:network|polygon)"), _CHAIN_EXPLORER_BY_ID[137]),
-        (re.compile(r"(?i)\b(?:bnb|bsc)\s+(?:smart\s+)?chain\b|\b(?:binance|bnb)\s+chain\b|\bbsc\b"), _CHAIN_EXPLORER_BY_ID[56]),
+        (
+            re.compile(r"(?i)\b(?:arbitrum|arb\s+(?:mainnet|one))\b|\b42161\b"),
+            _CHAIN_EXPLORER_BY_ID[42161],
+        ),
+        (
+            re.compile(r"(?i)\b(?:optimism|op\s+(?:chain|stack|mainnet))\b"),
+            _CHAIN_EXPLORER_BY_ID[10],
+        ),
+        (
+            re.compile(r"(?i)\bpolygon\b|\b(?:matic\b)\s+(?:network|polygon)"),
+            _CHAIN_EXPLORER_BY_ID[137],
+        ),
+        (
+            re.compile(
+                r"(?i)\b(?:bnb|bsc)\s+(?:smart\s+)?chain\b|\b(?:binance|bnb)\s+chain\b|\bbsc\b"
+            ),
+            _CHAIN_EXPLORER_BY_ID[56],
+        ),
         (re.compile(r"(?i)\blinea\b"), _CHAIN_EXPLORER_BY_ID[59144]),
         (re.compile(r"(?i)\bscroll\b(?:\s+mainnet|\s+L2\b)?"), _CHAIN_EXPLORER_BY_ID[534352]),
         (re.compile(r"(?i)\b(?:zk\s*s?ync|zkSync)\s+era\b"), _CHAIN_EXPLORER_BY_ID[324]),
@@ -101,7 +125,7 @@ def _explicit_explorer_base_for_line(line: str) -> str | None:
 
 
 def _link_evm_explorer_entities(html_fragment: str, *, explorer_base: str) -> str:
-    """Wrap tx hashes and contracts in Telegram-safe ``<a>`` URLs; ``html_fragment`` is already escaped."""
+    """Wrap tx hashes and addresses in Telegram-safe ``<a>`` (input HTML already escaped)."""
 
     def _subs(segment: str) -> str:
         def tx_repl(m: re.Match[str]) -> str:
@@ -361,10 +385,75 @@ def build_telegram_application(
         if not _telegram_chat_is_allowed(cid_opt, allowed_chats):
             gate_log.debug("Telegram /start ignored (disallowed chat_id=%r)", chat_id_raw)
             return
-        if update.effective_message is not None:
-            await update.effective_message.reply_text(
-                "Aurey is ready. Send a message to invoke the agent."
+        msg = update.effective_message
+        if msg is None:
+            return
+        cfg = state.settings
+        db_url = (cfg.database_url or "").strip()
+        if cfg.hosted_platform_enabled and db_url and state.hosted_session_factory is not None:
+            from aurey.cloud.platform_client import (
+                HostedPlatformApiError,
+                OneClawPlatformClient,
             )
+            from aurey.cloud.provision import (
+                HostedProvisioningError,
+                ensure_telegram_user_provisioned,
+            )
+
+            tg_user = update.effective_user
+            tid_raw = getattr(tg_user, "id", None)
+            if tid_raw is None:
+                await msg.reply_text("Could not read your Telegram user id.")
+                return
+            telegram_user_id = int(tid_raw)
+            telegram_username = getattr(tg_user, "username", None)
+
+            def _provision_sync() -> str:
+                factory = state.hosted_session_factory
+                if factory is None:
+                    raise RuntimeError("hosted_session_factory is not configured.")
+                platform = OneClawPlatformClient.from_settings(cfg)
+                db = factory()
+                try:
+                    row, _ = ensure_telegram_user_provisioned(
+                        db,
+                        cfg,
+                        platform,
+                        telegram_user_id=telegram_user_id,
+                        username=telegram_username,
+                    )
+                    db.commit()
+                    return row.claim_url
+                except Exception:
+                    db.rollback()
+                    raise
+                finally:
+                    db.close()
+
+            try:
+                claim_url = await asyncio.to_thread(_provision_sync)
+            except HostedProvisioningError as exc:
+                await msg.reply_text(f"Hosted setup failed (configuration): {exc}")
+                return
+            except HostedPlatformApiError as exc:
+                await msg.reply_text(f"Hosted setup failed (platform): {exc}")
+                return
+            except Exception:
+                gate_log.exception("Telegram hosted provisioning failed")
+                await msg.reply_text("Hosted setup failed; see service logs for details.")
+                return
+
+            safe_url = html.escape(claim_url.strip(), quote=False)
+            text = (
+                "<b>Hosted Aurey</b>\n"
+                "Your claim link is ready. Open it to finish setup:\n\n"
+                f"{safe_url}\n\n"
+                "After claiming, send messages here as usual."
+            )
+            await msg.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+            return
+
+        await msg.reply_text("Aurey is ready. Send a message to invoke the agent.")
 
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         msg = update.effective_message
@@ -406,7 +495,10 @@ def build_telegram_application(
             """Refresh ``typing``; Telegram clears it after a few seconds."""
             while not typing_done.is_set():
                 try:
-                    await context.bot.send_chat_action(chat_id=chat_id_int, action=ChatAction.TYPING)
+                    await context.bot.send_chat_action(
+                        chat_id=chat_id_int,
+                        action=ChatAction.TYPING,
+                    )
                 except Exception:
                     pass
                 if typing_done.is_set():

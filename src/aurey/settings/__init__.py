@@ -132,6 +132,22 @@ class AureySettings(BaseSettings):
         ),
     )
 
+    hosted_platform_enabled: bool = Field(
+        default=False,
+        description=(
+            "When true, enable hosted control-plane integrations "
+            "(Telegram provisioning, DB metadata). "
+            "Requires a configured Postgres ``database_url``."
+        ),
+    )
+    hosted_synthetic_email_domain: str = Field(
+        default="hosted-aurey.local",
+        description=(
+            "Synthetic email domain for Platform user upserts (e.g. ``tg_123@<domain>``). "
+            "Whitespace is stripped; leading/trailing dots removed."
+        ),
+    )
+
     hosted_oidc_issuer_url: str | None = Field(
         default=None,
         description="Phase B: OIDC issuer URL for hosted user flows (optional).",
@@ -214,6 +230,14 @@ class AureySettings(BaseSettings):
         validation_alias=AliasChoices("AUREY_DATABASE_URL", "DATABASE_URL"),
     )
 
+    @field_validator("hosted_synthetic_email_domain")
+    @classmethod
+    def _hosted_synthetic_email_domain_normalized(cls, v: str) -> str:
+        s = (v or "").strip().strip(".")
+        if not s:
+            raise ValueError("hosted_synthetic_email_domain must not be empty.")
+        return s
+
     @field_validator("telegram_allowed_chat_ids")
     @classmethod
     def _telegram_allowed_chat_ids_syntax(cls, v: str | None) -> str | None:
@@ -252,7 +276,7 @@ class AureySettings(BaseSettings):
         return value
 
     def resolve_operator_agent_api_key(self) -> str:
-        """Return operator agent API key from the env named by ``operator_agent_api_key_secret_source``."""
+        """Return the operator agent API key from ``operator_agent_api_key_secret_source``."""
 
         name = self.operator_agent_api_key_secret_source.strip()
         if not name:

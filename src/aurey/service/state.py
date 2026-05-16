@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
@@ -23,16 +24,24 @@ class AureyServiceState:
     runtime: AureyRuntime
     checkpointer: BaseCheckpointSaver
     default_model: str
+    hosted_session_factory: Callable[..., Any] | None = None
     _graphs: dict[str, CompiledStateGraph[Any, Any, Any]] = field(default_factory=dict)
     _lock: Lock = field(default_factory=Lock)
     _postgres: ManagedPostgresCheckpointer | None = field(default=None, repr=False)
+    _hosted_engine: Any | None = field(default=None, repr=False)
 
     def close_checkpointer(self) -> None:
-        """Release Postgres pool/connection manager if this process opened one."""
+        """Release Postgres pool/connection manager if this process opened one.
+
+        Also disposes the optional hosted metadata engine, if any.
+        """
 
         if self._postgres is not None:
             self._postgres.close()
             self._postgres = None
+        if self._hosted_engine is not None:
+            self._hosted_engine.dispose()
+            self._hosted_engine = None
 
     def get_or_create_graph(self, model: str | None) -> CompiledStateGraph[Any, Any, Any]:
         """Return a compiled deep agent keyed by resolved model identity (bounded cache).

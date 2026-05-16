@@ -33,6 +33,8 @@ def test_settings_defaults():
     assert s.operator_vault_id == ""
     assert s.operator_agent_id is None
     assert s.operator_agent_api_key_secret_source == "AUREY_OPERATOR_AGENT_API_KEY"
+    assert s.hosted_platform_enabled is False
+    assert s.hosted_synthetic_email_domain == "hosted-aurey.local"
     assert s.hosted_oidc_issuer_url is None
     assert s.hosted_oidc_audience is None
     assert s.hosted_oidc_subject_token_ttl_seconds == 300
@@ -148,6 +150,22 @@ def test_resolve_operator_agent_api_key(monkeypatch):
     monkeypatch.setenv("CUSTOM_OP_KEY", "ocv_test_fake")
     s = AureySettings(operator_agent_api_key_secret_source="CUSTOM_OP_KEY")
     assert s.resolve_operator_agent_api_key() == "ocv_test_fake"
+
+
+def test_settings_hosted_platform_env(monkeypatch):
+    monkeypatch.delenv("AUREY_HOSTED_PLATFORM_ENABLED", raising=False)
+    monkeypatch.delenv("AUREY_HOSTED_SYNTHETIC_EMAIL_DOMAIN", raising=False)
+    monkeypatch.setenv("AUREY_HOSTED_PLATFORM_ENABLED", "true")
+    monkeypatch.setenv("AUREY_HOSTED_SYNTHETIC_EMAIL_DOMAIN", " .example.test. ")
+    s = AureySettings()
+    assert s.hosted_platform_enabled is True
+    assert s.hosted_synthetic_email_domain == "example.test"
+
+
+def test_settings_hosted_synthetic_email_domain_rejects_empty(monkeypatch):
+    monkeypatch.delenv("AUREY_HOSTED_SYNTHETIC_EMAIL_DOMAIN", raising=False)
+    with pytest.raises(ValidationError):
+        AureySettings(hosted_synthetic_email_domain="  . ")
 
 
 def test_resolve_operator_agent_api_key_missing(monkeypatch):
