@@ -1,4 +1,4 @@
-"""Alembic environment: load DB URL from AUREY_DATABASE_URL then DATABASE_URL."""
+"""Alembic environment: load DB URL from DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -25,9 +25,9 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    url = (os.environ.get("AUREY_DATABASE_URL") or os.environ.get("DATABASE_URL") or "").strip()
+    url = (os.environ.get("DATABASE_URL") or "").strip()
     if not url:
-        msg = "Set AUREY_DATABASE_URL or DATABASE_URL for Alembic migrations."
+        msg = "Set DATABASE_URL for Alembic migrations."
         raise RuntimeError(msg)
     return url
 
