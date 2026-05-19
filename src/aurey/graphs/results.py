@@ -13,7 +13,9 @@ GraphErrorCode = Literal[
     "ens_not_found",
     "unsupported_chain",
     "simulation_failed",
+    "hosted_signing_context_required",
     "secret_not_configured",
+    "secret_not_supported",
     "secret_unavailable",
     "secret_not_found",
     "invalid_input",
@@ -170,7 +172,9 @@ class LiFiAllowanceContext(BaseModel):
     token_address: str
     spender_address: str
     amount_raw: str = Field(
-        description="LiFi route sell amount in raw units (same as ``allowance.amount_raw`` when set).",
+        description=(
+            "LiFi route sell amount in raw units (same as ``allowance.amount_raw`` when set)."
+        ),
         pattern=r"^[0-9]+$",
     )
     current_allowance_raw: str | None = Field(

@@ -9,6 +9,7 @@ description = "Standalone deep agent service (LangChain Deep Agents, LangGraph, 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=42",
     "langchain",
     "langchain-openai",
     "langgraph",
@@ -21,9 +22,10 @@ dependencies = [
 [project.optional-dependencies]
 api = [
     "fastapi",
-    "uvicorn[standard]",
     "langgraph-checkpoint-postgres>=3.1.0",
     "psycopg[binary]>=3.2.0",
+    "sqlalchemy>=2",
+    "uvicorn[standard]",
 ]
 telegram = [
     "python-telegram-bot>=21",
@@ -31,10 +33,13 @@ telegram = [
 
 [dependency-groups]
 dev = [
+    "alembic",
     "fastapi>=0.115",
     "langgraph-checkpoint-postgres>=3.1.0",
+    "psycopg2-binary>=2.9.12",
     "pytest>=8",
     "ruff>=0.8",
+    "sqlalchemy>=2",
 ]
 
 [tool.setuptools.packages.find]

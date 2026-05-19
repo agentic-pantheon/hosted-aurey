@@ -12,7 +12,9 @@ from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
 
+from aurey.cloud.signing_context import HostedSigningContext
 from aurey.custody.errors import SecretNotFoundError, SecretStoreUnavailableError
+from aurey.graphs.evm_codec import to_checksum_evm_address
 from aurey.service.bootstrap import bootstrap_aurey_service_state
 from aurey.service.invoke import AgentInvokeResult, invoke_deep_agent_turn
 from aurey.service.message_content import reply_preview_from_summary
@@ -34,6 +36,56 @@ def _telegram_chat_is_allowed(chat_id: int | None, allowed: frozenset[int] | Non
     return chat_id in allowed
 
 
+def _hosted_finish_claim_short_message() -> str:
+    return "Finish hosted setup first: open the claim link from /start, then message me again."
+
+
+def _hosted_user_must_finish_claim_message(
+    state: AureyServiceState,
+    *,
+    telegram_user_id: int,
+) -> str | None:
+    """Return reply text when the user is still awaiting claim (after a refresh attempt).
+
+    ``None`` means normal agent invoke should proceed.
+    """
+
+    cfg = state.settings
+    if not cfg.hosted_platform_enabled:
+        return None
+    if not (cfg.database_url or "").strip():
+        return None
+    factory = state.hosted_session_factory
+    if factory is None:
+        return None
+
+    from aurey.cloud.onboarding_refresh import refresh_hosted_user_claim_state
+    from aurey.cloud.platform_client import HostedPlatformApiError, OneClawPlatformClient
+
+    db = factory()
+    try:
+        platform = OneClawPlatformClient.from_settings(cfg)
+        row = refresh_hosted_user_claim_state(db, cfg, platform, telegram_user_id)
+        db.commit()
+    except HostedPlatformApiError:
+        db.rollback()
+        return (
+            "Could not verify hosted setup yet—try again in a moment, or use /start for your "
+            "claim link."
+        )
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+    if row is None:
+        return None
+    if (row.onboarding_state or "").strip() == "awaiting_claim":
+        return _hosted_finish_claim_short_message()
+    return None
+
+
 _TELEGRAM_MAX_MESSAGE_CHARS = 4096
 _TELEGRAM_CHUNK_TARGET_CHARS = 3600
 _TELEGRAM_TYPING_REFRESH_SEC = 4.0
@@ -41,9 +93,7 @@ _TELEGRAM_STATUS_EDIT_THROTTLE_SEC = 1.25
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _HEX_INLINE_BACKTICK_RE = re.compile(r"`(0x(?:[a-fA-F0-9]{64}|[a-fA-F0-9]{40}))`")
-_SKIP_ANCHORS_AND_CODE_RE = re.compile(
-    r"(<code>[\s\S]*?</code>|<a\b[^>]*>[\s\S]*?</a>)"
-)
+_SKIP_ANCHORS_AND_CODE_RE = re.compile(r"(<code>[\s\S]*?</code>|<a\b[^>]*>[\s\S]*?</a>)")
 _TX_HASH_RE = re.compile(r"\b(0x[a-fA-F0-9]{64})\b")
 _ADDRESS_RE = re.compile(r"\b(0x[a-fA-F0-9]{40})\b")
 
@@ -60,12 +110,17 @@ _CHAIN_EXPLORER_BY_ID: dict[int, str] = {
     43114: "https://snowtrace.io",
 }
 
-_CHAIN_ID_HINT_RE = re.compile(r"(?i)\bchain(?:\s+i?d|\s+#)?\s*(?:[:=]|is)\s*(?:(?:#|=\s*|id\s+)\s*)?(\d+)\b")
+_CHAIN_ID_HINT_RE = re.compile(
+    r"(?i)\bchain(?:\s+i?d|\s+#)?\s*(?:[:=]|is)\s*(?:(?:#|=\s*|id\s+)\s*)?(\d+)\b"
+)
 _STANDALONE_CHAIN_ID_RE = re.compile(r"\b(8453|42161|59144|534352|43114)\b")
 
 
 def _explicit_explorer_base_for_line(line: str) -> str | None:
-    """Return explorer URL when ``line`` signals a chain; ``None`` to inherit sticky paragraph context."""
+    """Return explorer URL when ``line`` signals a chain.
+
+    ``None`` means inherit sticky paragraph context.
+    """
 
     m = _CHAIN_ID_HINT_RE.search(line)
     if m is not None:
@@ -76,12 +131,29 @@ def _explicit_explorer_base_for_line(line: str) -> str | None:
     if ms is not None:
         return _CHAIN_EXPLORER_BY_ID[int(ms.group(1))]
     keyword_rules: list[tuple[re.Pattern[str], str]] = [
-        (re.compile(r"(?i)\b(?:base(?:\s+mainnet|\s+l2|\s+l2:?)?|\bon\s+base\b)(?!\s*i/o)"), _CHAIN_EXPLORER_BY_ID[8453]),
+        (
+            re.compile(r"(?i)\b(?:base(?:\s+mainnet|\s+l2|\s+l2:?)?|\bon\s+base\b)(?!\s*i/o)"),
+            _CHAIN_EXPLORER_BY_ID[8453],
+        ),
         (re.compile(r"(?i)\b(?:usdc\s+on\s+base\b)"), _CHAIN_EXPLORER_BY_ID[8453]),
-        (re.compile(r"(?i)\b(?:arbitrum|arb\s+(?:mainnet|one))\b|\b42161\b"), _CHAIN_EXPLORER_BY_ID[42161]),
-        (re.compile(r"(?i)\b(?:optimism|op\s+(?:chain|stack|mainnet))\b"), _CHAIN_EXPLORER_BY_ID[10]),
-        (re.compile(r"(?i)\bpolygon\b|\b(?:matic\b)\s+(?:network|polygon)"), _CHAIN_EXPLORER_BY_ID[137]),
-        (re.compile(r"(?i)\b(?:bnb|bsc)\s+(?:smart\s+)?chain\b|\b(?:binance|bnb)\s+chain\b|\bbsc\b"), _CHAIN_EXPLORER_BY_ID[56]),
+        (
+            re.compile(r"(?i)\b(?:arbitrum|arb\s+(?:mainnet|one))\b|\b42161\b"),
+            _CHAIN_EXPLORER_BY_ID[42161],
+        ),
+        (
+            re.compile(r"(?i)\b(?:optimism|op\s+(?:chain|stack|mainnet))\b"),
+            _CHAIN_EXPLORER_BY_ID[10],
+        ),
+        (
+            re.compile(r"(?i)\bpolygon\b|\b(?:matic\b)\s+(?:network|polygon)"),
+            _CHAIN_EXPLORER_BY_ID[137],
+        ),
+        (
+            re.compile(
+                r"(?i)\b(?:bnb|bsc)\s+(?:smart\s+)?chain\b|\b(?:binance|bnb)\s+chain\b|\bbsc\b"
+            ),
+            _CHAIN_EXPLORER_BY_ID[56],
+        ),
         (re.compile(r"(?i)\blinea\b"), _CHAIN_EXPLORER_BY_ID[59144]),
         (re.compile(r"(?i)\bscroll\b(?:\s+mainnet|\s+L2\b)?"), _CHAIN_EXPLORER_BY_ID[534352]),
         (re.compile(r"(?i)\b(?:zk\s*s?ync|zkSync)\s+era\b"), _CHAIN_EXPLORER_BY_ID[324]),
@@ -101,7 +173,7 @@ def _explicit_explorer_base_for_line(line: str) -> str | None:
 
 
 def _link_evm_explorer_entities(html_fragment: str, *, explorer_base: str) -> str:
-    """Wrap tx hashes and contracts in Telegram-safe ``<a>`` URLs; ``html_fragment`` is already escaped."""
+    """Wrap tx hashes and addresses in Telegram-safe ``<a>`` (input HTML already escaped)."""
 
     def _subs(segment: str) -> str:
         def tx_repl(m: re.Match[str]) -> str:
@@ -230,7 +302,11 @@ def telegram_message_chunks(text: str) -> list[str]:
 
 
 def resolve_telegram_bot_token(state: AureyServiceState) -> str:
-    """Resolve the Telegram bot token via SecretStore using a configured vault path."""
+    """Resolve the Telegram bot token from settings env or SecretStore vault path."""
+
+    direct = (state.settings.telegram_bot_token or "").strip()
+    if direct:
+        return direct
 
     path = state.settings.telegram_bot_token_secret_path
     if not path:
@@ -286,6 +362,77 @@ class TelegramInvokeProgressCallback(BaseCallbackHandler):
         self._sink("Gathering details…")
 
 
+def hosted_invoke_bundle_for_telegram_user(
+    state: AureyServiceState,
+    *,
+    telegram_user_id: int | str | None,
+) -> tuple[HostedSigningContext | None, dict[str, str]]:
+    """Load hosted row once: optional signing context for ``ready`` users + ``hosted_wallet_address``.
+
+    The wallet extra is included whenever ``wallet_address`` is persisted, even before ``ready``,
+    so the model can reference a funding address during claim.
+    """
+
+    extras: dict[str, str] = {}
+    if telegram_user_id is None:
+        return None, extras
+    cfg = state.settings
+    if not cfg.hosted_platform_enabled:
+        return None, extras
+    factory = state.hosted_session_factory
+    if factory is None:
+        return None, extras
+
+    from sqlalchemy import select
+
+    from aurey.cloud.models import HostedPlatformUserORM
+
+    tid = int(telegram_user_id)
+    db = factory()
+    try:
+        row = db.scalar(
+            select(HostedPlatformUserORM).where(HostedPlatformUserORM.telegram_user_id == tid),
+        )
+        if row is None:
+            return None, extras
+        wa_raw = (row.wallet_address or "").strip()
+        if wa_raw:
+            try:
+                extras["hosted_wallet_address"] = to_checksum_evm_address(wa_raw)
+            except ValueError:
+                pass
+        if (row.onboarding_state or "").strip() != "ready":
+            return None, extras
+        enc_raw = row.agent_api_key_encrypted
+        enc_out = enc_raw.strip() if isinstance(enc_raw, str) and enc_raw.strip() else None
+        leg_raw = row.agent_api_key
+        leg_out = leg_raw.strip() if isinstance(leg_raw, str) and leg_raw.strip() else None
+        ctx = HostedSigningContext(
+            telegram_user_id=tid,
+            user_agent_id=(row.user_agent_id or "").strip(),
+            agent_api_key_encrypted=enc_out,
+            agent_api_key_legacy_plaintext=leg_out,
+            wallet_address=extras.get("hosted_wallet_address"),
+        )
+        return ctx, extras
+    finally:
+        db.close()
+
+
+def hosted_signing_context_for_telegram_user(
+    state: AureyServiceState,
+    *,
+    telegram_user_id: int | str | None,
+) -> HostedSigningContext | None:
+    """Load hosted DB row for an onboarding-ready user (``user_agent_id`` for 1Claw intents)."""
+
+    signing, _ = hosted_invoke_bundle_for_telegram_user(
+        state,
+        telegram_user_id=telegram_user_id,
+    )
+    return signing
+
+
 def _last_text_message(result: AgentInvokeResult) -> str:
     text = reply_preview_from_summary(result.messages)
     return text if text else "Done."
@@ -306,6 +453,11 @@ def handle_telegram_text(
     context: dict[str, Any] = {"telegram_chat_id": str(chat_id)}
     if user_id is not None:
         context["telegram_user_id"] = str(user_id)
+    signing_ctx, hosted_ctx = hosted_invoke_bundle_for_telegram_user(
+        state,
+        telegram_user_id=user_id,
+    )
+    context.update(hosted_ctx)
     extras = [TelegramInvokeProgressCallback(progress_sink)] if progress_sink is not None else None
     result = invoke_deep_agent_turn(
         state,
@@ -314,6 +466,7 @@ def handle_telegram_text(
         context=context,
         model=model,
         extra_callbacks=extras,
+        hosted_signing_context=signing_ctx,
     )
     if result.ok:
         return _last_text_message(result)
@@ -327,8 +480,7 @@ def _import_telegram_ext():
         from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise RuntimeError(
-            "Telegram support requires the optional 'telegram' extra: "
-            "pip install -e '.[telegram]'"
+            "Telegram support requires the optional 'telegram' extra: pip install -e '.[telegram]'"
         ) from exc
     return Application, CommandHandler, ContextTypes, MessageHandler, Update, filters
 
@@ -361,10 +513,110 @@ def build_telegram_application(
         if not _telegram_chat_is_allowed(cid_opt, allowed_chats):
             gate_log.debug("Telegram /start ignored (disallowed chat_id=%r)", chat_id_raw)
             return
-        if update.effective_message is not None:
-            await update.effective_message.reply_text(
-                "Aurey is ready. Send a message to invoke the agent."
+        msg = update.effective_message
+        if msg is None:
+            return
+        cfg = state.settings
+        db_url = (cfg.database_url or "").strip()
+        if cfg.hosted_platform_enabled and db_url and state.hosted_session_factory is not None:
+            from aurey.cloud.onboarding_refresh import refresh_hosted_user_claim_state
+            from aurey.cloud.platform_client import (
+                HostedPlatformApiError,
+                OneClawPlatformClient,
             )
+            from aurey.cloud.provision import (
+                HostedProvisioningError,
+                ensure_telegram_user_provisioned,
+            )
+            from aurey.custody.secret_store import OneClawHttpClient
+
+            tg_user = update.effective_user
+            tid_raw = getattr(tg_user, "id", None)
+            if tid_raw is None:
+                await msg.reply_text("Could not read your Telegram user id.")
+                return
+            telegram_user_id = int(tid_raw)
+            telegram_username = getattr(tg_user, "username", None)
+
+            def _provision_sync() -> tuple[str, str]:
+                factory = state.hosted_session_factory
+                if factory is None:
+                    raise RuntimeError("hosted_session_factory is not configured.")
+                platform = OneClawPlatformClient.from_settings(cfg)
+                db = factory()
+                try:
+                    vault_http = (
+                        state.runtime.oneclaw_evm_signer
+                        if isinstance(state.runtime.oneclaw_evm_signer, OneClawHttpClient)
+                        else None
+                    )
+                    row, _ = ensure_telegram_user_provisioned(
+                        db,
+                        cfg,
+                        platform,
+                        telegram_user_id=telegram_user_id,
+                        username=telegram_username,
+                        vault_http_client=vault_http,
+                    )
+                    try:
+                        refresh_hosted_user_claim_state(db, cfg, platform, row)
+                    except HostedPlatformApiError:
+                        gate_log.warning(
+                            "Hosted claim refresh failed after /start provision",
+                            exc_info=False,
+                        )
+                    db.commit()
+                    return row.claim_url, (row.onboarding_state or "").strip()
+                except Exception:
+                    db.rollback()
+                    raise
+                finally:
+                    db.close()
+
+            try:
+                claim_url, onboard = await asyncio.to_thread(_provision_sync)
+            except HostedProvisioningError as exc:
+                await msg.reply_text(f"Hosted setup failed (configuration): {exc}")
+                return
+            except HostedPlatformApiError as exc:
+                await msg.reply_text(f"Hosted setup failed (platform): {exc}")
+                return
+            except Exception:
+                gate_log.exception("Telegram hosted provisioning failed")
+                await msg.reply_text("Hosted setup failed; see service logs for details.")
+                return
+
+            if onboard == "ready":
+                lines = [
+                    "<b>Hosted Aurey</b>",
+                    "You're all set — send a message to invoke the agent.",
+                ]
+                cu = (claim_url or "").strip()
+                if cu:
+                    lines.append("")
+                    lines.append(
+                        "If you still need your onboarding URL (it expires quickly): "
+                        "open this link once to finish claiming."
+                    )
+                    lines.append(html.escape(cu, quote=False))
+                await msg.reply_text(
+                    "\n".join(lines),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+                return
+
+            safe_url = html.escape(claim_url.strip(), quote=False)
+            text = (
+                "<b>Hosted Aurey</b>\n"
+                "Your claim link is ready. Open it to finish setup:\n\n"
+                f"{safe_url}\n\n"
+                "After claiming, send messages here as usual."
+            )
+            await msg.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+            return
+
+        await msg.reply_text("Aurey is ready. Send a message to invoke the agent.")
 
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         msg = update.effective_message
@@ -378,6 +630,17 @@ def build_telegram_application(
             gate_log.debug("Telegram message ignored (disallowed chat_id=%r)", chat_id_raw)
             return
         chat_id_for_session = chat_id_raw if chat_id_raw is not None else "unknown"
+
+        tid_for_gate = getattr(user, "id", None)
+        if tid_for_gate is not None:
+            block = await asyncio.to_thread(
+                _hosted_user_must_finish_claim_message,
+                state,
+                telegram_user_id=int(tid_for_gate),
+            )
+            if block is not None:
+                await msg.reply_text(block)
+                return
 
         if chat_id_raw is None:
             reply = await asyncio.to_thread(
@@ -406,7 +669,10 @@ def build_telegram_application(
             """Refresh ``typing``; Telegram clears it after a few seconds."""
             while not typing_done.is_set():
                 try:
-                    await context.bot.send_chat_action(chat_id=chat_id_int, action=ChatAction.TYPING)
+                    await context.bot.send_chat_action(
+                        chat_id=chat_id_int,
+                        action=ChatAction.TYPING,
+                    )
                 except Exception:
                     pass
                 if typing_done.is_set():
@@ -546,6 +812,8 @@ __all__ = [
     "create_telegram_application",
     "format_telegram_message",
     "handle_telegram_text",
+    "hosted_invoke_bundle_for_telegram_user",
+    "hosted_signing_context_for_telegram_user",
     "resolve_telegram_bot_token",
     "telegram_message_chunks",
 ]

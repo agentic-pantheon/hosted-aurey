@@ -1,5 +1,7 @@
 """Application settings (paths-only secret references, 1Claw connection config).
 
+Optional plaintext ``AUREY_*`` keys for Alchemy, LiFi, and Telegram may be set for hosted
+deployments; when non-empty they take precedence over vault ``*_secret_path`` resolution.
 Note: Configuration lives in this package intentionally; do not add a sibling
 ``aurey/settings.py`` module, which would conflict with this package name.
 """
@@ -82,10 +84,137 @@ class AureySettings(BaseSettings):
             "when expiry is known)."
         ),
     )
+    oneclaw_delegated_token_scope: str = Field(
+        default="1claw:intents:delegated",
+        description=(
+            "OAuth-style scope string for 1Claw intents delegation / hosted token flows; "
+            "adjust to match your Platform app and security policy."
+        ),
+    )
+
+    platform_app_id: str | None = Field(
+        default=None,
+        description=(
+            "Platform app UUID (from ``GET /v1/platform/apps``). When set, hosted onboarding "
+            "poll uses ``GET /v1/platform/apps/{id}/users`` to detect claim completion when "
+            "per-connection GET is unavailable."
+        ),
+    )
+    platform_api_key: str | None = Field(
+        default=None,
+        description=(
+            "Hosted Platform API key value (``plt_…``). Supply via ``AUREY_PLATFORM_API_KEY`` "
+            "(see ``validation_alias``)."
+        ),
+        validation_alias=AliasChoices("AUREY_PLATFORM_API_KEY"),
+    )
+    platform_template_id: str = Field(
+        default="",
+        description=(
+            "Platform provisioning template id (from bootstrap / operator setup). "
+            "Empty until a template is registered."
+        ),
+    )
+    operator_vault_id: str = Field(
+        default="",
+        description=(
+            "1Claw vault id the operator / agent runtime uses for secret reads "
+            "(``ocv_`` context). Leave empty until provisioned."
+        ),
+    )
+    operator_agent_id: str | None = Field(
+        default=None,
+        description="Optional operator agent id in 1Claw (hosted control plane).",
+    )
+    operator_agent_api_key_secret_source: str = Field(
+        default="AUREY_OPERATOR_AGENT_API_KEY",
+        description=(
+            "Name of the env var whose value is an optional **delegated-token actor** key "
+            "(e.g. separate ``ocv_``). When unset or empty, ``resolve_delegated_actor_api_key`` "
+            "falls back to ``resolve_oneclaw_bootstrap_api_key``."
+        ),
+    )
+
+    hosted_platform_enabled: bool = Field(
+        default=False,
+        description=(
+            "When true, enable hosted control-plane integrations "
+            "(Telegram provisioning, DB metadata). "
+            "Requires a configured Postgres ``database_url``."
+        ),
+    )
+    hosted_synthetic_email_domain: str = Field(
+        default="hosted-aurey.local",
+        description=(
+            "Synthetic email domain for Platform user upserts (e.g. ``tg_123@<domain>``). "
+            "Whitespace is stripped; leading/trailing dots removed."
+        ),
+    )
+    hosted_http_admin_token: str | None = Field(
+        default=None,
+        description=(
+            "Opaque Bearer token guarding ``POST /v1/hosted/sync-wallet``. "
+            "Global per deployment (not per Telegram user); unset disables the endpoint (503)."
+        ),
+    )
+
+    hosted_agent_api_key_vault_id: str = Field(
+        default="",
+        description=(
+            "Vault UUID for dual-writing hosted users' ``ocv_`` secrets via Human API PUT; "
+            "when empty, ``oneclaw_vault_id`` is used."
+        ),
+    )
+    hosted_agent_api_key_path_prefix: str = Field(
+        default="hosted/agents",
+        description=(
+            "Prefix segment before ``/{user_agent_id}/agent_api_key`` for vault paths "
+            "(alphanumeric, hyphens, underscores, slashes only)."
+        ),
+    )
+    hosted_secrets_master_key: str | None = Field(
+        default=None,
+        description=(
+            "Fernet URL-safe base64 key for ``hosted_platform_users.agent_api_key_encrypted``. "
+            "Generate with Fernet.generate_key().decode()."
+        ),
+    )
+    oneclaw_human_api_token: str | None = Field(
+        default=None,
+        description=(
+            "Human API Bearer JWT for vault PUT when persisting hosted ``ocv_`` at bootstrap. "
+            "Unset skips vault PUT (Postgres ciphertext/plaintext only)."
+        ),
+    )
+
+    hosted_oidc_issuer_url: str | None = Field(
+        default=None,
+        description="Phase B: OIDC issuer URL for hosted user flows (optional).",
+    )
+    hosted_oidc_audience: str | None = Field(
+        default=None,
+        description="Phase B: OIDC audience for hosted tokens (optional).",
+    )
+    hosted_oidc_subject_token_ttl_seconds: int = Field(
+        default=300,
+        ge=1,
+        description=(
+            "Phase B: suggested TTL (seconds) in user-facing docs for subject / session-token "
+            "freshness; not enforced by this settings model alone."
+        ),
+    )
 
     alchemy_api_secret_path: str | None = Field(
         default=None,
         description="1Claw vault path for the Alchemy API key used for reads and RPC URLs.",
+    )
+    alchemy_api_key: str | None = Field(
+        default=None,
+        description=(
+            "Optional plaintext Alchemy API key (``AUREY_ALCHEMY_API_KEY``). "
+            "When set, used instead of ``alchemy_api_secret_path``."
+        ),
+        validation_alias=AliasChoices("AUREY_ALCHEMY_API_KEY"),
     )
     lifi_api_secret_path: str | None = Field(
         default=None,
@@ -93,6 +222,14 @@ class AureySettings(BaseSettings):
             "Optional 1Claw vault path for LiFi API key. If unset, swap quotes use "
             "unauthenticated LiFi (lower rate limits)."
         ),
+    )
+    lifi_api_key: str | None = Field(
+        default=None,
+        description=(
+            "Optional plaintext LiFi API key (``AUREY_LIFI_API_KEY``). When set, used instead of "
+            "``lifi_api_secret_path``."
+        ),
+        validation_alias=AliasChoices("AUREY_LIFI_API_KEY"),
     )
     lifi_integrator: str = Field(
         default="aurey",
@@ -119,6 +256,14 @@ class AureySettings(BaseSettings):
     telegram_bot_token_secret_path: str | None = Field(
         default=None,
         description="1Claw vault path for the Telegram bot token.",
+    )
+    telegram_bot_token: str | None = Field(
+        default=None,
+        description=(
+            "Optional plaintext Telegram bot token (``AUREY_TELEGRAM_BOT_TOKEN``). When set, "
+            "preferred over ``telegram_bot_token_secret_path``."
+        ),
+        validation_alias=AliasChoices("AUREY_TELEGRAM_BOT_TOKEN"),
     )
     telegram_allowed_chat_ids: str | None = Field(
         default=None,
@@ -148,6 +293,22 @@ class AureySettings(BaseSettings):
         validation_alias=AliasChoices("AUREY_DATABASE_URL", "DATABASE_URL"),
     )
 
+    @field_validator("alchemy_api_key", "lifi_api_key", "telegram_bot_token", mode="before")
+    @classmethod
+    def _strip_optional_plaintext_api_credentials(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
+
+    @field_validator("hosted_synthetic_email_domain")
+    @classmethod
+    def _hosted_synthetic_email_domain_normalized(cls, v: str) -> str:
+        s = (v or "").strip().strip(".")
+        if not s:
+            raise ValueError("hosted_synthetic_email_domain must not be empty.")
+        return s
+
     @field_validator("telegram_allowed_chat_ids")
     @classmethod
     def _telegram_allowed_chat_ids_syntax(cls, v: str | None) -> str | None:
@@ -158,6 +319,27 @@ class AureySettings(BaseSettings):
             return None
         parse_telegram_allowed_chat_ids(stripped)
         return stripped
+
+    @field_validator("hosted_agent_api_key_vault_id", mode="before")
+    @classmethod
+    def _hosted_agent_api_key_vault_id_strip(cls, v: object) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+    @field_validator("hosted_agent_api_key_path_prefix")
+    @classmethod
+    def _hosted_agent_api_key_path_prefix_normalized(cls, v: str) -> str:
+        s = (v or "").strip().strip("/")
+        return s if s else "hosted/agents"
+
+    @field_validator("oneclaw_human_api_token", "hosted_secrets_master_key", mode="before")
+    @classmethod
+    def _strip_optional_hosted_crypto(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
 
     @property
     def telegram_allowed_chat_id_allowlist(self) -> frozenset[int] | None:
@@ -184,3 +366,32 @@ class AureySettings(BaseSettings):
         if not value:
             raise ValueError(f"Environment variable {name!r} is set but empty.")
         return value
+
+    def resolve_operator_agent_api_key(self) -> str:
+        """Return the operator agent API key from ``operator_agent_api_key_secret_source``."""
+
+        name = self.operator_agent_api_key_secret_source.strip()
+        if not name:
+            raise ValueError("operator_agent_api_key_secret_source must not be empty.")
+        raw = os.environ.get(name)
+        if raw is None:
+            raise KeyError(name)
+        value = raw.strip()
+        if not value:
+            raise ValueError(f"Environment variable {name!r} is set but empty.")
+        return value
+
+    def resolve_delegated_actor_api_key(self) -> str:
+        """Actor token for ``POST /v1/auth/delegated-token`` when using hosted intents.
+
+        If ``AUREY_OPERATOR_AGENT_API_KEY`` (via ``operator_agent_api_key_secret_source``)
+        is set and non-empty, use it — otherwise reuse the bootstrap 1Claw API key so a
+        single operator credential is enough for hosted deployments.
+        """
+
+        source = (self.operator_agent_api_key_secret_source or "").strip()
+        if source:
+            raw = os.environ.get(source)
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+        return self.resolve_oneclaw_bootstrap_api_key()

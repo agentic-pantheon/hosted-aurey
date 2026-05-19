@@ -45,8 +45,9 @@ class _LocalOneClawSigner:
         chain: str,
         transaction: dict,
         signing_key_path: str | None = None,
+        authorization_bearer: str | None = None,
     ) -> OneClawSignTransactionResult:
-        _ = signing_key_path
+        _ = signing_key_path, authorization_bearer
         key_hex = "0x" + self._acct.key.hex()
         signed = Account.sign_transaction(transaction, key_hex)
         raw = signed.raw_transaction
@@ -136,6 +137,26 @@ def test_run_prepared_success_with_mock_w3():
     mock_w3.eth.wait_for_transaction_receipt.assert_called_once()
 
 
+def test_run_prepared_success_with_alchemy_env_key_only():
+    signer = Account.create()
+    mock_w3 = _mock_w3_for_success()
+
+    pipeline = Web3TxPipeline(
+        settings=AureySettings(alchemy_api_key="test-alchemy-key"),
+        secret_store=FakeSecretStore({}),
+        web3_factory=lambda _url: mock_w3,
+        receipt_timeout_s=5.0,
+    )
+    env = _envelope(signer=signer)
+    key_hex = "0x" + signer.key.hex()
+
+    out = pipeline.run_prepared(env, signing_key_material_hex=key_hex)
+
+    assert out.tx_hash.startswith("0x")
+    assert len(out.tx_hash) == 66
+    assert out.receipt.status == 1
+
+
 def test_run_prepared_with_oneclaw_signer_success():
     acct = Account.create()
     mock_w3 = _mock_w3_for_success()
@@ -160,6 +181,7 @@ def test_run_prepared_with_oneclaw_signer_success():
             chain: str,
             transaction: dict,
             signing_key_path: str | None = None,
+            authorization_bearer: str | None = None,
         ) -> OneClawSignTransactionResult:
             self.seen_agent_id = agent_id
             self.seen_chain = chain
@@ -169,6 +191,7 @@ def test_run_prepared_with_oneclaw_signer_success():
                 chain=chain,
                 transaction=transaction,
                 signing_key_path=signing_key_path,
+                authorization_bearer=authorization_bearer,
             )
 
     signer = RecordingSigner(acct)
@@ -219,11 +242,13 @@ def test_run_prepared_with_oneclaw_signer_returns_wrong_from_address():
             chain: str,
             transaction: dict,
             signing_key_path: str | None = None,
+            authorization_bearer: str | None = None,
         ) -> OneClawSignTransactionResult:
             _ = agent_id
             _ = chain
             _ = transaction
             _ = signing_key_path
+            _ = authorization_bearer
             return OneClawSignTransactionResult(
                 signed_tx="0xabcd",
                 from_address=other.address,
@@ -245,8 +270,9 @@ def test_run_prepared_with_oneclaw_signer_sign_exception():
             chain: str,
             transaction: dict,
             signing_key_path: str | None = None,
+            authorization_bearer: str | None = None,
         ) -> None:
-            _ = agent_id, chain, transaction, signing_key_path
+            _ = agent_id, chain, transaction, signing_key_path, authorization_bearer
             raise ValueError("1claw unreachable")
 
     pipeline = Web3TxPipeline(

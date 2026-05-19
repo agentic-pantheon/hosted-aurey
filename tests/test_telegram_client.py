@@ -87,6 +87,8 @@ class _FakeServiceState:
     def __init__(self, graph: _RecordingGraph) -> None:
         self.graph = graph
         self.model: str | None = None
+        self.settings = AureySettings()
+        self.hosted_session_factory = None
 
     def get_or_create_graph(self, model: str | None):
         self.model = model
@@ -183,7 +185,8 @@ def test_format_telegram_message_renders_common_markdown_as_html() -> None:
 def test_format_telegram_message_links_tx_and_address_to_explorers() -> None:
     raw = (
         "**Swapped**\n\n"
-        "- Approval tx (**USDC on Base**): 0x6f2d7bd436f5817f7f6b728d008728487b1fbdcf6a78eeb0d39bc33e3905f82c\n"
+        "- Approval tx (**USDC on Base**): "
+        "0x6f2d7bd436f5817f7f6b728d008728487b1fbdcf6a78eeb0d39bc33e3905f82c\n"
         "- Swap + bridge tx (**WETH (Ethereum)**): "
         "0x00481f71cfe4f9ccd5ead1acbd7ed3def662c66ea2a3369a348fbedd23e33be5\n\n"
         "Recipient: 0x7a3e29106d238334b7134ddd824b7923bcf717d2"
@@ -247,6 +250,27 @@ def test_resolve_telegram_bot_token_uses_secret_store() -> None:
     )
 
     assert resolve_telegram_bot_token(state) == FAKE_TELEGRAM_BOT_TOKEN
+
+
+def test_resolve_telegram_bot_token_prefers_env_over_vault() -> None:
+    settings = AureySettings(
+        telegram_bot_token="env-telegram-token",
+        telegram_bot_token_secret_path="aurey/telegram/bot_token",
+    )
+    runtime = AureyRuntime(
+        settings=settings,
+        secret_store=FakeSecretStore({"aurey/telegram/bot_token": "vault-token"}),
+        evm_rpc_factory=rpc_factory_from_mapping({}),
+        http=ScriptedHttpClient(),
+        tx_pipeline=DeterministicTxPipeline(),
+    )
+    state = AureyServiceState(
+        settings=settings,
+        runtime=runtime,
+        checkpointer=make_memory_checkpointer(),
+        default_model="stub-model",
+    )
+    assert resolve_telegram_bot_token(state) == "env-telegram-token"
 
 
 def test_resolve_telegram_bot_token_missing_path_is_sanitized() -> None:

@@ -7,11 +7,7 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
-from aurey.custody.errors import (
-    SecretNotFoundError,
-    SecretStoreUnavailableError,
-    secret_unavailable_graph_details,
-)
+from aurey.graphs.api_key_resolution import effective_alchemy_api_key
 from aurey.graphs.chains import alchemy_rpc_url_for_chain, chain_id_for, chain_info
 from aurey.graphs.ens_eth import (
     ENS_REGISTRY_MAINNET,
@@ -62,28 +58,14 @@ def _alchemy_rpc_or_error(
 ) -> tuple[Any | None, dict[str, Any] | None]:
     """Open JSON-RPC for ``chain`` via Alchemy URL, or return ``GraphErrorBody`` dict."""
 
-    alchemy_path = runtime.settings.alchemy_api_secret_path
-    if not alchemy_path:
-        return None, GraphErrorBody(
-            code="secret_not_configured",
-            message="Alchemy API secret path is not configured.",
-            details={"chain": chain},
-        ).model_dump()
-
-    try:
-        alchemy_key = runtime.secret_store.get_secret(alchemy_path).reveal()
-    except SecretNotFoundError:
-        return None, GraphErrorBody(
-            code="secret_not_found",
-            message="Alchemy API secret could not be resolved.",
-            details={"secret_kind": "alchemy_api"},
-        ).model_dump()
-    except SecretStoreUnavailableError as exc:
-        return None, GraphErrorBody(
-            code="secret_unavailable",
-            message="Secret store unavailable while resolving Alchemy API key.",
-            details=secret_unavailable_graph_details(secret_kind="alchemy_api", exc=exc),
-        ).model_dump()
+    alchemy_key, err_body = effective_alchemy_api_key(
+        runtime.settings,
+        runtime.secret_store,
+        extra_secret_not_configured_details={"chain": chain},
+    )
+    if err_body is not None:
+        return None, err_body
+    assert alchemy_key is not None
 
     rpc_url = alchemy_rpc_url_for_chain(chain, alchemy_key)
     if rpc_url is None:

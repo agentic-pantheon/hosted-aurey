@@ -71,5 +71,6 @@ class TxPipelinePort(Protocol):
         signer: OneClawEvmTransactionSigner,
         *,
         agent_id: str,
+        authorization_bearer: str | None = None,
     ) -> TxExecuteResult:
         """Sign via 1Claw and broadcast (``signing_mode`` oneclaw_intents)."""

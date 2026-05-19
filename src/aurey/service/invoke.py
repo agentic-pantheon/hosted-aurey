@@ -6,10 +6,15 @@ import logging
 import time
 from typing import Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from openai import APIConnectionError, APITimeoutError
 from pydantic import BaseModel
 
+from aurey.cloud.signing_context import (
+    HostedSigningContext,
+    hosted_signing_context_scope,
+)
+from aurey.graphs.evm_codec import to_checksum_evm_address
 from aurey.reasoning import thread_config
 from aurey.service.agent_trace import build_agent_trace_handler, format_exception_chain
 from aurey.service.message_content import (
@@ -67,10 +72,58 @@ def _is_transient_llm_error(exc: BaseException) -> bool:
     return False
 
 
-def _invoke_graph_with_transient_retries(graph, *, message: str, config: dict[str, Any]) -> Any:
+def _resolve_hosted_wallet_address_hint(
+    context: dict[str, Any],
+    *,
+    hosted_signing_context: HostedSigningContext | None,
+    hosted_platform_enabled: bool,
+) -> str | None:
+    """Return checksummed EVM wallet from invoke context or signing context.
+
+    When ``hosted_platform_enabled``, ignore client-supplied ``hosted_wallet_address`` in
+    ``context`` (HTTP invoke must not steer the binding).
+    """
+
+    raw: str | None = None
+    if not hosted_platform_enabled:
+        v = context.get("hosted_wallet_address")
+        if isinstance(v, str) and v.strip():
+            raw = v.strip()
+    if not raw and hosted_signing_context is not None:
+        w = (hosted_signing_context.wallet_address or "").strip()
+        raw = w or None
+    if not raw:
+        return None
+    try:
+        return to_checksum_evm_address(raw)
+    except ValueError:
+        _log.warning("Ignoring invalid hosted_wallet_address hint for invoke.")
+        return None
+
+
+def _hosted_wallet_system_turn_line(addr: str) -> str:
+    return (
+        "Hosted-user binding for this chat turn: the default EVM wallet address "
+        f"(from/swap/read context) is {addr}. Treat this as authoritative when the user "
+        'says "my wallet" or omits addresses unless they explicitly name a different '
+        "`0x` or ENS name."
+    )
+
+
+def _invoke_graph_with_transient_retries(
+    graph,
+    *,
+    message: str,
+    config: dict[str, Any],
+    hosted_wallet_address: str | None = None,
+) -> Any:
     """Retry LLM HTTP/network blips during ``graph.invoke`` (often wrapped by LangChain)."""
 
-    payload = {"messages": [HumanMessage(content=message)]}
+    messages: list[Any] = []
+    if hosted_wallet_address:
+        messages.append(SystemMessage(content=_hosted_wallet_system_turn_line(hosted_wallet_address)))
+    messages.append(HumanMessage(content=message))
+    payload = {"messages": messages}
     last_exc: BaseException | None = None
     for attempt in range(_MODEL_TRANSIENT_ATTEMPTS):
         try:
@@ -113,8 +166,13 @@ def invoke_deep_agent_turn(
     context: dict[str, Any] | None = None,
     model: str | None = None,
     extra_callbacks: list[Any] | None = None,
+    hosted_signing_context: HostedSigningContext | None = None,
 ) -> AgentInvokeResult:
-    """Invoke the shared deep-agent graph with sanitized error responses."""
+    """Invoke the shared deep-agent graph with sanitized error responses.
+
+    ``hosted_signing_context`` is optional: bind per-user 1Claw delegation (Telegram-hosted).
+    The HTTP ``POST /v1/invoke`` entrypoint typically omits it (MVP).
+    """
 
     _log.info(
         "incoming  %s",
@@ -139,15 +197,24 @@ def invoke_deep_agent_turn(
         )
 
     spec = (model or "").strip() or svc.default_model
-    ctx_keys = ",".join(sorted(context)) if context else ""
+    merged_context: dict[str, Any] = dict(context) if context else {}
+    hosted_wallet_resolved = _resolve_hosted_wallet_address_hint(
+        merged_context,
+        hosted_signing_context=hosted_signing_context,
+        hosted_platform_enabled=bool(svc.settings.hosted_platform_enabled),
+    )
+    if hosted_wallet_resolved:
+        merged_context["hosted_wallet_address"] = hosted_wallet_resolved
+
+    ctx_keys = ",".join(sorted(merged_context)) if merged_context else ""
     _log.debug(
         "invoke context  %s",
         _kv_line(model=spec, context_keys=ctx_keys or "(none)", session=session_id),
     )
 
     extra: dict[str, Any] = {}
-    if context is not None:
-        extra["aurey_context"] = context
+    if merged_context:
+        extra["aurey_context"] = merged_context
     config = thread_config(session_id, **extra)
     merged: list[Any] = []
     trace_handler = build_agent_trace_handler(session_id=session_id)
@@ -186,9 +253,21 @@ def invoke_deep_agent_turn(
         )
 
     try:
-        result = _invoke_graph_with_transient_retries(
-            graph, message=message, config=config
-        )
+        if hosted_signing_context is not None:
+            with hosted_signing_context_scope(hosted_signing_context):
+                result = _invoke_graph_with_transient_retries(
+                    graph,
+                    message=message,
+                    config=config,
+                    hosted_wallet_address=hosted_wallet_resolved,
+                )
+        else:
+            result = _invoke_graph_with_transient_retries(
+                graph,
+                message=message,
+                config=config,
+                hosted_wallet_address=hosted_wallet_resolved,
+            )
     except Exception as exc:
         _log.warning(
             "agent invoke failed after retries  session=%s  detail=%s",
@@ -239,6 +318,7 @@ def invoke_deep_agent_turn(
 __all__ = [
     "AgentInvokeError",
     "AgentInvokeResult",
+    "HostedSigningContext",
     "flatten_message_content",
     "invoke_deep_agent_turn",
     "summarize_agent_messages",

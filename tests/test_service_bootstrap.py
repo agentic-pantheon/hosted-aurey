@@ -51,6 +51,53 @@ def test_bootstrap_raises_on_missing_bootstrap_env(monkeypatch):
         bootstrap_aurey_service_state(s)
 
 
+def test_bootstrap_hosted_requires_database_url(monkeypatch):
+    monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "k")
+    s = AureySettings(
+        oneclaw_vault_id="v-hosted",
+        hosted_platform_enabled=True,
+        database_url=None,
+    )
+    with pytest.raises(AureyServiceBootstrapError, match="database URL"):
+        bootstrap_aurey_service_state(s)
+
+
+def test_bootstrap_hosted_attaches_session_factory(monkeypatch):
+    monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "k")
+    captured: list[object] = []
+
+    def fake_make_engine(settings):
+        from sqlalchemy import create_engine
+
+        eng = create_engine("sqlite+pysqlite:///:memory:")
+        captured.append(eng)
+        return eng
+
+    monkeypatch.setattr("aurey.cloud.session.make_engine", fake_make_engine)
+
+    def fake_open(url: str) -> ManagedPostgresCheckpointer:
+        _ = url
+        cm = MagicMock()
+        cm.__exit__ = MagicMock(return_value=False)
+        saver = MagicMock()
+        return ManagedPostgresCheckpointer(saver=saver, _cm=cm)
+
+    monkeypatch.setattr("aurey.service.bootstrap.open_postgres_checkpointer", fake_open)
+    s = AureySettings(
+        oneclaw_vault_id="v-hosted-db",
+        database_url="postgres://stub",
+        hosted_platform_enabled=True,
+    )
+    state = bootstrap_aurey_service_state(s)
+    assert state.hosted_session_factory is not None
+    assert len(captured) == 1
+    assert state._hosted_engine is captured[0]
+    sess = state.hosted_session_factory()
+    sess.close()
+    state.close_checkpointer()
+    assert state._hosted_engine is None
+
+
 def test_bootstrap_oneclaw_evm_signer_is_same_as_secret_store_client(monkeypatch):
     monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "k")
     clients: list[OneClawHttpClient] = []

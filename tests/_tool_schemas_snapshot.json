@@ -1,6 +1,6 @@
 {
   "alchemy_get_portfolio_tokens": {
-    "description": "Alchemy portfolio (tokens-by-wallet); requires ``alchemy_api_secret_path`` in settings.",
+    "description": "Alchemy portfolio (tokens-by-wallet); requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` in settings.",
     "properties": {
       "chain": {
         "description": "Chain slug (e.g. ethereum, base).",
@@ -23,7 +23,7 @@
     "type": "object"
   },
   "alchemy_get_token_prices": {
-    "description": "Alchemy token spot prices; requires ``alchemy_api_secret_path`` in Aurey settings.",
+    "description": "Alchemy token spot prices; requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` in settings.",
     "properties": {
       "chain": {
         "description": "Chain slug (e.g. ethereum, base).",
@@ -56,7 +56,7 @@
     "type": "object"
   },
   "alchemy_get_transfer_history": {
-    "description": "Alchemy transfer history via ``alchemy_getAssetTransfers``; requires ``alchemy_api_secret_path``.",
+    "description": "Alchemy transfer history via ``alchemy_getAssetTransfers``; requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path``.",
     "properties": {
       "chain": {
         "description": "Chain slug (e.g. ethereum, base).",
@@ -162,7 +162,7 @@
   },
   "earn_list_chains": {
     "additionalProperties": false,
-    "description": "Discover LiFi Earn-supported chains (vault discovery); optional LiFi key via ``lifi_api_secret_path``.",
+    "description": "Discover LiFi Earn-supported chains (vault discovery); optional LiFi key via env or ``lifi_api_secret_path``.",
     "properties": {},
     "title": "EarnListChainsArgs",
     "type": "object"
@@ -457,7 +457,7 @@
     "type": "object"
   },
   "evm_get_erc20_balance": {
-    "description": "ERC-20 ``balanceOf`` via JSON-RPC; requires ``alchemy_api_secret_path`` for RPC.",
+    "description": "ERC-20 ``balanceOf`` via JSON-RPC; requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` for RPC.",
     "properties": {
       "chain": {
         "minLength": 1,
@@ -485,7 +485,7 @@
     "type": "object"
   },
   "evm_get_erc20_decimals": {
-    "description": "Read token ``decimals()``; uses RPC from Alchemy-backed URL when configured.",
+    "description": "Read token ``decimals()``; uses RPC from Alchemy-backed URL (env key or vault path) when configured.",
     "properties": {
       "chain": {
         "minLength": 1,
@@ -506,7 +506,7 @@
     "type": "object"
   },
   "evm_get_native_balance": {
-    "description": "Native balance via JSON-RPC; requires ``alchemy_api_secret_path`` for RPC URL derivation.",
+    "description": "Native balance via JSON-RPC; requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` for RPC URL derivation.",
     "properties": {
       "chain": {
         "description": "Chain slug (e.g. ethereum, base).",
@@ -552,7 +552,7 @@
     "type": "object"
   },
   "lifi_get_status": {
-    "description": "``GET /v1/status`` on ``runtime.lifi_base_url``; optional ``x-lifi-api-key`` from settings.",
+    "description": "``GET /v1/status`` on ``runtime.lifi_base_url``.\n\nOptional ``x-lifi-api-key`` from env or vault path in settings.",
     "properties": {
       "bridge": {
         "anyOf": [
@@ -705,7 +705,7 @@
     "type": "object"
   },
   "swap_prepare": {
-    "description": "LiFi swap quote (``GET /v1/quote``); optional authenticated LiFi when ``lifi_api_secret_path`` is set in Aurey settings.",
+    "description": "LiFi swap quote (`GET /v1/quote`).\n\nOptional LiFi key from env or ``lifi_api_secret_path``.",
     "properties": {
       "from_address": {
         "minLength": 1,
@@ -882,7 +882,7 @@
     "type": "object"
   },
   "tx_prepare_erc20_transfer": {
-    "description": "Prepare ERC-20 transfer; RPC from Alchemy path if configured.",
+    "description": "Prepare ERC-20 transfer; RPC from Alchemy credentials (env or vault path) if configured.",
     "properties": {
       "amount_wei": {
         "description": "Token amount in the contract's smallest units (not necessarily 1e18). Lookup token decimals: USDC on Base/Ethereum uses **6** \u2014 e.g. 0.01 USDC = **10_000**, 1 USDC = **1_000_000**. WETH uses 18. Do not scale USDC by 10**18.",

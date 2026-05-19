@@ -8,6 +8,10 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, ValidationError
 
+from aurey.cloud.signing_context import (
+    current_hosted_signing_context,
+    hosted_signing_missing_context_graph_error,
+)
 from aurey.custody import OneClawEvmTransactionSigner
 from aurey.custody.errors import (
     SecretNotFoundError,
@@ -121,16 +125,6 @@ def _execute_node(runtime: AureyRuntime, state: TxExecuteGraphState) -> TxExecut
 
         return {"result": outcome.model_dump()}
 
-    agent_id = runtime.settings.oneclaw_agent_id
-    if agent_id is None or not str(agent_id).strip():
-        return {
-            "error": GraphErrorBody(
-                code="secret_not_configured",
-                message="oneclaw_agent_id must be configured for oneclaw_intents execution.",
-                details=None,
-            ).model_dump()
-        }
-
     signer = runtime.oneclaw_evm_signer
     if signer is None:
         return {
@@ -141,11 +135,47 @@ def _execute_node(runtime: AureyRuntime, state: TxExecuteGraphState) -> TxExecut
             ).model_dump()
         }
 
+    settings = runtime.settings
+    hctx = current_hosted_signing_context.get()
+    delegated_bearer: str | None = None
+    agent_id: str | None = None
+
+    if settings.hosted_platform_enabled:
+        if hctx is None:
+            return {"error": hosted_signing_missing_context_graph_error()}
+        aid = (hctx.user_agent_id or "").strip()
+        if not aid:
+            return {
+                "error": GraphErrorBody(
+                    code="secret_not_configured",
+                    message=(
+                        "Hosted signing requires a provisioned user_agent_id for this Telegram user."
+                    ),
+                    details=None,
+                ).model_dump()
+            }
+        agent_id = aid
+        delegated_bearer = None
+    else:
+        legacy_agent = settings.oneclaw_agent_id
+        if legacy_agent is None or not str(legacy_agent).strip():
+            return {
+                "error": GraphErrorBody(
+                    code="secret_not_configured",
+                    message="oneclaw_agent_id must be configured for oneclaw_intents execution.",
+                    details=None,
+                ).model_dump()
+            }
+        agent_id = str(legacy_agent).strip()
+
+    assert agent_id is not None
+
     try:
         outcome = runtime.tx_pipeline.run_prepared_with_oneclaw_signer(
             envelope,
             signer,
-            agent_id=str(agent_id).strip(),
+            agent_id=agent_id,
+            authorization_bearer=delegated_bearer,
         )
     except RuntimeError as exc:
         return {"error": _pipeline_runtime_error_response(exc)}
@@ -233,7 +263,32 @@ class DeterministicTxPipeline(TxPipelinePort):
         signer: OneClawEvmTransactionSigner,
         *,
         agent_id: str,
+        authorization_bearer: str | None = None,
     ) -> TxExecuteResult:
-        _ = signer, agent_id  # production path uses 1Claw HTTP signing
+        """Exercise the signer for fakes; deterministic outcomes ignore real signatures."""
+
+        from aurey.graphs.chains import chain_name_for_id
+
+        ch = chain_name_for_id(envelope.chain_id) or "base"
+        vraw = envelope.value_hex or "0x0"
+        try:
+            v = int(vraw, 0)
+        except ValueError:
+            v = 0
+        signer.sign_evm_transaction(
+            agent_id=agent_id,
+            chain=ch,
+            transaction={
+                "to": envelope.to,
+                "data": envelope.data or "0x",
+                "value": v,
+                "nonce": 0,
+                "gas": 21_000,
+                "maxFeePerGas": 30_000_000_000,
+                "maxPriorityFeePerGas": 2_000_000_000,
+            },
+            signing_key_path=envelope.signing_key_secret_path,
+            authorization_bearer=authorization_bearer,
+        )
         self._maybe_raise_fail_stage()
         return self._deterministic_success(envelope)

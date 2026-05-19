@@ -22,6 +22,11 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
     """Wire 1Claw secret store, runtime, and a LangGraph checkpointer (Postgres or in-memory)."""
 
     s = settings or AureySettings()
+    if s.hosted_platform_enabled and not (s.database_url or "").strip():
+        raise AureyServiceBootstrapError(
+            "Hosted platform is enabled but no database URL is configured "
+            "(set DATABASE_URL or AUREY_DATABASE_URL)."
+        )
     vault_id = (s.oneclaw_vault_id or "").strip()
     if not vault_id:
         raise AureyServiceBootstrapError("1Claw vault id is not configured.")
@@ -41,6 +46,7 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
         base_url=s.oneclaw_base_url.strip(),
         api_key=api_key,
         agent_token_expiry_skew_seconds=s.oneclaw_agent_token_expiry_skew_seconds,
+        hosted_settings_for_ocv=s if s.hosted_platform_enabled else None,
     )
     store = OneClawSecretStore(client=client, vault_id=vault_id, agent_id=s.oneclaw_agent_id)
 
@@ -63,12 +69,21 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
             raise AureyServiceBootstrapError(
                 "PostgreSQL checkpointer could not be initialized."
             ) from exc
+        hosted_session_factory = None
+        hosted_engine = None
+        if s.hosted_platform_enabled:
+            from aurey.cloud.session import make_engine, make_session_factory
+
+            hosted_engine = make_engine(s)
+            hosted_session_factory = make_session_factory(hosted_engine)
         return AureyServiceState(
             settings=s,
             runtime=runtime,
             checkpointer=pg.saver,
             default_model=default_model,
+            hosted_session_factory=hosted_session_factory,
             _postgres=pg,
+            _hosted_engine=hosted_engine,
         )
 
     return AureyServiceState(
