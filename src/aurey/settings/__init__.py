@@ -95,8 +95,9 @@ class AureySettings(BaseSettings):
     platform_app_id: str | None = Field(
         default=None,
         description=(
-            "Optional Platform app identifier (for API paths, metrics, and logging). "
-            "Unset when not wired to the 1Claw Platform API."
+            "Platform app UUID (from ``GET /v1/platform/apps``). When set, hosted onboarding "
+            "poll uses ``GET /v1/platform/apps/{id}/users`` to detect claim completion when "
+            "per-connection GET is unavailable."
         ),
     )
     platform_api_key: str | None = Field(
@@ -128,9 +129,9 @@ class AureySettings(BaseSettings):
     operator_agent_api_key_secret_source: str = Field(
         default="AUREY_OPERATOR_AGENT_API_KEY",
         description=(
-            "Name of the environment variable whose **value** is the operator agent API key "
-            "(``ocv_…`` or bootstrap-style key), same indirection pattern as "
-            "``oneclaw_api_key_secret_source``. Never commit the key; set the named env only."
+            "Name of the env var whose value is an optional **delegated-token actor** key "
+            "(e.g. separate ``ocv_``). When unset or empty, ``resolve_delegated_actor_api_key`` "
+            "falls back to ``resolve_oneclaw_bootstrap_api_key``."
         ),
     )
 
@@ -156,6 +157,13 @@ class AureySettings(BaseSettings):
         description=(
             "Synthetic email domain for Platform user upserts (e.g. ``tg_123@<domain>``). "
             "Whitespace is stripped; leading/trailing dots removed."
+        ),
+    )
+    hosted_http_admin_token: str | None = Field(
+        default=None,
+        description=(
+            "Opaque Bearer token guarding ``POST /v1/hosted/sync-wallet``. "
+            "Global per deployment (not per Telegram user); unset disables the endpoint (503)."
         ),
     )
 
@@ -348,3 +356,18 @@ class AureySettings(BaseSettings):
         if not value:
             raise ValueError(f"Environment variable {name!r} is set but empty.")
         return value
+
+    def resolve_delegated_actor_api_key(self) -> str:
+        """Actor token for ``POST /v1/auth/delegated-token`` when using hosted intents.
+
+        If ``AUREY_OPERATOR_AGENT_API_KEY`` (via ``operator_agent_api_key_secret_source``)
+        is set and non-empty, use it — otherwise reuse the bootstrap 1Claw API key so a
+        single operator credential is enough for hosted deployments.
+        """
+
+        source = (self.operator_agent_api_key_secret_source or "").strip()
+        if source:
+            raw = os.environ.get(source)
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+        return self.resolve_oneclaw_bootstrap_api_key()

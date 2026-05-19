@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,6 +37,31 @@ InvokeError = AgentInvokeError
 InvokeResponse = AgentInvokeResult
 
 
+class HostedSyncWalletBody(BaseModel):
+    """Privileged sync: ``telegram_user_id`` targets one ``hosted_platform_users`` row."""
+
+    telegram_user_id: int = Field(..., ge=1)
+
+
+class HostedSyncWalletResponse(BaseModel):
+    telegram_user_id: int
+    user_agent_id: str | None = None
+    wallet_address: str | None = None
+
+
+def _hosted_http_bearer_matches_configured(admin_token: str, authorization_header: str | None) -> bool:
+    ct = admin_token.strip()
+    if not ct or authorization_header is None:
+        return False
+    auth = authorization_header.strip()
+    if not auth.lower().startswith("bearer "):
+        return False
+    got = auth[7:].strip()
+    if len(got) != len(ct):
+        return False
+    return secrets.compare_digest(got.encode("utf-8"), ct.encode("utf-8"))
+
+
 def create_fastapi_application(
     *,
     state: AureyServiceState | None = None,
@@ -48,7 +74,8 @@ def create_fastapi_application(
 
     from contextlib import asynccontextmanager
 
-    from fastapi import FastAPI
+    from fastapi import FastAPI, HTTPException
+    from sqlalchemy import select
 
     injected = state
 
@@ -85,6 +112,69 @@ def create_fastapi_application(
             model=turn.agent_model_spec,
         )
 
+    @app.post("/v1/hosted/sync-wallet", response_model=HostedSyncWalletResponse)
+    def hosted_sync_wallet(
+        request: Request,
+        body: HostedSyncWalletBody,
+    ) -> HostedSyncWalletResponse:
+        from aurey.cloud.models import HostedPlatformUserORM
+        from aurey.cloud.platform_client import HostedPlatformApiError, OneClawPlatformClient
+        from aurey.cloud.wallet_sync import sync_wallet_address_from_signing_keys
+
+        authorization = request.headers.get("authorization")
+        svc = get_aurey_service_state(request)
+        if svc is None:
+            raise HTTPException(status_code=503, detail="service_unavailable")
+        settings = svc.settings
+        if not settings.hosted_platform_enabled:
+            raise HTTPException(status_code=503, detail="hosted_disabled")
+        expected_token = (settings.hosted_http_admin_token or "").strip()
+        if not expected_token:
+            raise HTTPException(status_code=503, detail="hosted_wallet_sync_disabled")
+        if not _hosted_http_bearer_matches_configured(expected_token, authorization):
+            raise HTTPException(status_code=401, detail="unauthorized")
+        factory = svc.hosted_session_factory
+        if factory is None:
+            raise HTTPException(status_code=503, detail="hosted_database_unconfigured")
+
+        db = factory()
+        try:
+            row = db.scalar(
+                select(HostedPlatformUserORM).where(
+                    HostedPlatformUserORM.telegram_user_id == body.telegram_user_id,
+                )
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="telegram_user_not_found")
+            uid = (row.user_agent_id or "").strip()
+            if not uid:
+                raise HTTPException(status_code=400, detail="user_agent_missing")
+            platform = OneClawPlatformClient.from_settings(settings)
+            try:
+                addr = sync_wallet_address_from_signing_keys(platform, user_agent_id=uid)
+            except HostedPlatformApiError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail="platform_signing_keys_failed",
+                ) from exc
+            if addr is not None:
+                row.wallet_address = addr
+                db.flush()
+            db.commit()
+            return HostedSyncWalletResponse(
+                telegram_user_id=body.telegram_user_id,
+                user_agent_id=row.user_agent_id,
+                wallet_address=row.wallet_address,
+            )
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     return app
 
 
@@ -99,6 +189,8 @@ app = create_default_application
 
 
 __all__ = [
+    "HostedSyncWalletBody",
+    "HostedSyncWalletResponse",
     "InvokeBody",
     "InvokeError",
     "InvokeResponse",

@@ -33,13 +33,12 @@ def _evm_prepare_signing_settings_error(runtime: AureyRuntime) -> dict[str, Any]
         ctx = current_hosted_signing_context.get()
         if settings.hosted_platform_enabled and ctx is not None:
             uid = (ctx.user_agent_id or "").strip()
-            tok = (ctx.delegation_subject_token or "").strip()
-            if not uid or not tok:
+            if not uid:
                 return GraphErrorBody(
                     code="secret_not_configured",
                     message=(
-                        "Hosted oneclaw_intents requires user_agent_id and delegation "
-                        "subject token (provision the user and run /delegation_grant)."
+                        "Hosted oneclaw_intents requires a provisioned user_agent_id "
+                        "for this Telegram user."
                     ),
                 ).model_dump()
         else:

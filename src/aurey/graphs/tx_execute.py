@@ -139,56 +139,18 @@ def _execute_node(runtime: AureyRuntime, state: TxExecuteGraphState) -> TxExecut
 
     if settings.hosted_platform_enabled and hctx is not None:
         aid = (hctx.user_agent_id or "").strip()
-        subj = (hctx.delegation_subject_token or "").strip()
-        if not aid or not subj:
+        if not aid:
             return {
                 "error": GraphErrorBody(
                     code="secret_not_configured",
                     message=(
-                        "Hosted signing requires a provisioned user_agent_id and delegation "
-                        "subject token (ask an operator to run /delegation_grant)."
+                        "Hosted signing requires a provisioned user_agent_id for this Telegram user."
                     ),
                     details=None,
-                ).model_dump()
-            }
-        post_delegated = getattr(signer, "post_delegated_access_token", None)
-        if not callable(post_delegated):
-            return {
-                "error": GraphErrorBody(
-                    code="secret_not_configured",
-                    message="Delegated token exchange is not available on this runtime signer.",
-                    details=None,
-                ).model_dump()
-            }
-        try:
-            actor_key = settings.resolve_operator_agent_api_key()
-        except (ValueError, KeyError):
-            return {
-                "error": GraphErrorBody(
-                    code="secret_not_configured",
-                    message="Operator agent API key is not configured for delegated signing.",
-                    details=None,
-                ).model_dump()
-            }
-        try:
-            delegated_bearer = post_delegated(
-                actor_token=actor_key,
-                subject_token=subj,
-                scope=(settings.oneclaw_delegated_token_scope or "").strip(),
-                agent_id=aid,
-            )
-        except SecretStoreUnavailableError as exc:
-            return {
-                "error": GraphErrorBody(
-                    code="secret_unavailable",
-                    message="Delegated signing token exchange failed.",
-                    details=secret_unavailable_graph_details(
-                        secret_kind="delegated_access_token",
-                        exc=exc,
-                    ),
                 ).model_dump()
             }
         agent_id = aid
+        delegated_bearer = None
     else:
         legacy_agent = settings.oneclaw_agent_id
         if legacy_agent is None or not str(legacy_agent).strip():

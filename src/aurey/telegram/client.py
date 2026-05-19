@@ -14,6 +14,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 
 from aurey.cloud.signing_context import HostedSigningContext
 from aurey.custody.errors import SecretNotFoundError, SecretStoreUnavailableError
+from aurey.graphs.evm_codec import to_checksum_evm_address
 from aurey.service.bootstrap import bootstrap_aurey_service_state
 from aurey.service.invoke import AgentInvokeResult, invoke_deep_agent_turn
 from aurey.service.message_content import reply_preview_from_summary
@@ -361,21 +362,26 @@ class TelegramInvokeProgressCallback(BaseCallbackHandler):
         self._sink("Gathering details…")
 
 
-def hosted_signing_context_for_telegram_user(
+def hosted_invoke_bundle_for_telegram_user(
     state: AureyServiceState,
     *,
     telegram_user_id: int | str | None,
-) -> HostedSigningContext | None:
-    """Load hosted DB row for a ready Telegram user (delegation + user agent id)."""
+) -> tuple[HostedSigningContext | None, dict[str, str]]:
+    """Load hosted row once: optional signing context for ``ready`` users + ``hosted_wallet_address``.
 
+    The wallet extra is included whenever ``wallet_address`` is persisted, even before ``ready``,
+    so the model can reference a funding address during claim.
+    """
+
+    extras: dict[str, str] = {}
     if telegram_user_id is None:
-        return None
+        return None, extras
     cfg = state.settings
     if not cfg.hosted_platform_enabled:
-        return None
+        return None, extras
     factory = state.hosted_session_factory
     if factory is None:
-        return None
+        return None, extras
 
     from sqlalchemy import select
 
@@ -384,20 +390,47 @@ def hosted_signing_context_for_telegram_user(
     tid = int(telegram_user_id)
     db = factory()
     try:
-        row = db.execute(
+        row = db.scalar(
             select(HostedPlatformUserORM).where(HostedPlatformUserORM.telegram_user_id == tid),
-        ).scalar_one_or_none()
+        )
         if row is None:
-            return None
+            return None, extras
+        wa_raw = (row.wallet_address or "").strip()
+        if wa_raw:
+            try:
+                extras["hosted_wallet_address"] = to_checksum_evm_address(wa_raw)
+            except ValueError:
+                pass
         if (row.onboarding_state or "").strip() != "ready":
-            return None
-        return HostedSigningContext(
+            return None, extras
+        dst_raw = row.delegation_subject_token
+        dst_out = dst_raw.strip() if isinstance(dst_raw, str) and dst_raw.strip() else None
+        ak_raw = row.agent_api_key
+        ak_out = ak_raw.strip() if isinstance(ak_raw, str) and ak_raw.strip() else None
+        ctx = HostedSigningContext(
             telegram_user_id=tid,
             user_agent_id=(row.user_agent_id or "").strip(),
-            delegation_subject_token=(row.delegation_subject_token or "").strip(),
+            delegation_subject_token=dst_out,
+            agent_api_key=ak_out,
+            wallet_address=extras.get("hosted_wallet_address"),
         )
+        return ctx, extras
     finally:
         db.close()
+
+
+def hosted_signing_context_for_telegram_user(
+    state: AureyServiceState,
+    *,
+    telegram_user_id: int | str | None,
+) -> HostedSigningContext | None:
+    """Load hosted DB row for an onboarding-ready user (``user_agent_id`` for 1Claw intents)."""
+
+    signing, _ = hosted_invoke_bundle_for_telegram_user(
+        state,
+        telegram_user_id=telegram_user_id,
+    )
+    return signing
 
 
 def _last_text_message(result: AgentInvokeResult) -> str:
@@ -420,10 +453,11 @@ def handle_telegram_text(
     context: dict[str, Any] = {"telegram_chat_id": str(chat_id)}
     if user_id is not None:
         context["telegram_user_id"] = str(user_id)
-    signing_ctx = hosted_signing_context_for_telegram_user(
+    signing_ctx, hosted_ctx = hosted_invoke_bundle_for_telegram_user(
         state,
         telegram_user_id=user_id,
     )
+    context.update(hosted_ctx)
     extras = [TelegramInvokeProgressCallback(progress_sink)] if progress_sink is not None else None
     result = invoke_deep_agent_turn(
         state,
@@ -522,7 +556,7 @@ def build_telegram_application(
                     except HostedPlatformApiError:
                         gate_log.warning(
                             "Hosted claim refresh failed after /start provision",
-                            exc_info=True,
+                            exc_info=False,
                         )
                     db.commit()
                     return row.claim_url, (row.onboarding_state or "").strip()
@@ -546,8 +580,20 @@ def build_telegram_application(
                 return
 
             if onboard == "ready":
+                lines = [
+                    "<b>Hosted Aurey</b>",
+                    "You're all set — send a message to invoke the agent.",
+                ]
+                cu = (claim_url or "").strip()
+                if cu:
+                    lines.append("")
+                    lines.append(
+                        "If you still need your onboarding URL (it expires quickly): "
+                        "open this link once to finish claiming."
+                    )
+                    lines.append(html.escape(cu, quote=False))
                 await msg.reply_text(
-                    "<b>Hosted Aurey</b>\nYou're all set — send a message to invoke the agent.",
+                    "\n".join(lines),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
@@ -849,6 +895,7 @@ __all__ = [
     "create_telegram_application",
     "format_telegram_message",
     "handle_telegram_text",
+    "hosted_invoke_bundle_for_telegram_user",
     "hosted_signing_context_for_telegram_user",
     "resolve_telegram_bot_token",
     "telegram_message_chunks",

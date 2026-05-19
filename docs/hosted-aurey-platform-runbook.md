@@ -14,44 +14,34 @@ Never commit `plt_` keys; use secrets managers or deployment env config only.
 
 Author a **template** JSON (exact schema per Platform docs) that describes:
 
-- **Vault** — where runtime secrets (operator / user-scoped) live; align `AUREY_OPERATOR_VAULT_ID` (and production vault ids) with this template.
+- **Vault** — where runtime secrets (operator / user-scoped) live; align your **deployment** **`AUREY_ONECLAW_VAULT_ID`** with whichever vault the bootstrap key can reach.
 - **Agents** — at least one agent with **`intents_api_enabled`** (or the current Platform equivalent) so delegated signing / intents flows work.
+- **Signing surfaces (Intents API)** — enable **`message_signing_enabled`** when hosted users need **EIP-191** ``personal_sign`` (off-chain auth). For **EIP-712** structured data, configure **`eip712_domain_allowlist`** and/or **`eip712_default_policy`** per [1Claw Intents](https://docs.1claw.xyz/docs/guides/intents-api): Permit / Permit2-style flows require explicit domain allowlisting. **Sign-only transactions** use **`POST /v1/agents/{agent_id}/transactions/sign`** (BYORPC): same policy/guardrails as Intents submit, **decimal ETH** ``value`` string in the body, returns ``signed_tx`` with **no broadcast**—not a replacement for the normal ``tx_prepare`` → ``tx_execute`` path unless the user explicitly needs a raw signed tx for an external RPC.
 - **Policies** — stub deny/allow rules appropriate for a hosted tier; tighten before production.
 
 Record the template id returned by the API or console and set:
 
 `AUREY_PLATFORM_TEMPLATE_ID=<id-from-bootstrap>`
 
-## 3. Operator agent and `ocv_` keys
+## 3. Operator 1Claw API key (`AUREY_ONECLAW_BOOTSTRAP_API_KEY`)
 
-For the control plane / operator runtime:
+Hosted Aurey still boots a **`OneClawHttpClient`** for vault access (fallback when env keys are not set) and for signing helpers. Configure:
 
-1. Create or note the **operator vault** and set `AUREY_OPERATOR_VAULT_ID` when ready (may stay empty until provisioned).
-2. Set `AUREY_OPERATOR_AGENT_ID` if the Platform assigns a dedicated operator agent.
-3. Put the **operator agent API key** (`ocv_` or bootstrap-style key per your setup) in the env var named by `AUREY_OPERATOR_AGENT_API_KEY_SECRET_SOURCE` (default: `AUREY_OPERATOR_AGENT_API_KEY`).
+- **`AUREY_ONECLAW_VAULT_ID`** — dashboard vault used for path-based reads.
+- **`AUREY_ONECLAW_BOOTSTRAP_API_KEY`** — your operator / deployment API key (**not** the Platform `plt_` key).
 
-Application code resolves the key via [`AureySettings.resolve_operator_agent_api_key()`](../src/aurey/settings/__init__.py), same indirection pattern as the 1Claw bootstrap key.
+**Delegated intents:** `POST /v1/auth/delegated-token` uses an **actor token**. Unless you set a dedicated **`AUREY_OPERATOR_AGENT_API_KEY`** (advanced), Aurey sends the **bootstrap key as the actor** so you operate with **one credential** by default (`resolve_delegated_actor_api_key` in [`AureySettings`](../src/aurey/settings/__init__.py)).
 
 ## 4. Intents delegation scope
 
 Set `AUREY_ONECLAW_DELEGATED_TOKEN_SCOPE` to the scope string your Platform app expects for hosted delegation (default placeholder in settings: `1claw:intents:delegated`). Adjust to match **docs.1claw.xyz** and your security review.
 
-## 5. User provisioning flow (reference)
-
-End-user onboarding is **Phase B** in most deployments: OIDC / token exchange, mapping users to vaults and agents created from the template above. Placeholder settings:
-
-- `AUREY_HOSTED_OIDC_ISSUER_URL`
-- `AUREY_HOSTED_OIDC_AUDIENCE`
-- `AUREY_HOSTED_OIDC_SUBJECT_TOKEN_TTL_SECONDS`
-
-Treat these as documentation-oriented defaults until the hosted auth path is implemented.
-
-## 6. Further reading
+## 5. Further reading
 
 - Platform API and console: [https://docs.1claw.xyz](https://docs.1claw.xyz)
 - Aurey env reference: repository root `.env.example`
 
-## 7. Operator API keys via environment
+## 6. Operator API keys via environment
 
 Hosted deployments usually set plaintext operator keys (preferred over vault paths when both are configured):
 
@@ -61,7 +51,16 @@ Hosted deployments usually set plaintext operator keys (preferred over vault pat
 
 See [.env.example](../.env.example) and [`api_key_resolution`](../src/aurey/graphs/api_key_resolution.py).
 
-## 8. Delegation grant (staging)
+## 7. Hosted intents auth (bootstrap + per-user agent)
 
-Delegated signing depends on storing a Platform **user grant** subject token (`delegation_subject_token` on `hosted_platform_users`). Telegram `/grant` and `/delegation_grant` persist this when `AUREY_HOSTED_ADMIN_TELEGRAM_USER_IDS` lists your numeric user id.
-Treat plaintext storage as **staging only**; replace with KMS or vault-managed references before production.
+**Current behavior:** For each Telegram user, once provisioning has a **`user_agent_id`**, Aurey obtains a JWT via **`POST /v1/auth/agent-token`**. The `api_key` in that request is the per-user **`ocv_`** value from **`summary.agent_api_key`** in the Platform bootstrap JSON when Aurey has persisted it in **`hosted_platform_users.agent_api_key`**; until that field is populated, **`AUREY_ONECLAW_BOOTSTRAP_API_KEY`** is used as the fallback. The returned Bearer is then sent on intents (`/sign`, `transactions/sign`, etc.). **`plt_`** keys are only for Platform routes (upsert, bootstrap), not for `agent-token`. Existing users provisioned before this column existed may need another bootstrap (or a manual DB update with the one-time `ocv_` from 1Claw) before `agent_api_key` is filled.
+
+**Legacy / optional:** The `hosted_platform_users.delegation_subject_token` column and Telegram **`/grant`** / **`/delegation_grant`** (when **`AUREY_HOSTED_ADMIN_TELEGRAM_USER_IDS`** is set) may still persist earlier **staging** subject tokens; they are **not** required for `oneclaw_intents` prepare/execute/tools when using the operator bootstrap key with template agents.
+
+Set **`AUREY_OPERATOR_AGENT_API_KEY`** only if your 1Claw setup uses a distinct operator credential from the bootstrap API key.
+
+## 8. Per-user EVM address + admin wallet sync
+
+Bootstrap responses may include **`summary.signing_keys`** (Ethereum **`address`**). Aurey persists a checksummed **`wallet_address`** on `hosted_platform_users` when present and backfills via **`GET /v1/agents/{user_agent_id}/signing-keys`** during onboarding polling when the field is still empty.
+
+To force a refresh without waiting for Telegram traffic, POST **`/v1/hosted/sync-wallet`** with JSON `{"telegram_user_id": <id>}` and header **`Authorization: Bearer <AUREY_HOSTED_HTTP_ADMIN_TOKEN>`**. Operators generate this token deployment-wide (not per user); leaving it unset disables the endpoint (503). On success the handler updates **`wallet_address`** from 1Claw when the signing-keys payload includes an Ethereum key.

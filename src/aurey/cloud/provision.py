@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from aurey.cloud.models import HostedPlatformUserORM
 from aurey.cloud.platform_client import OneClawPlatformClient
+from aurey.cloud.wallet_sync import maybe_backfill_wallet_from_signing_keys
 from aurey.settings import AureySettings
 
 
@@ -37,8 +38,9 @@ def ensure_telegram_user_provisioned(
 ) -> tuple[HostedPlatformUserORM, bool]:
     """Upsert hosted metadata and call the Platform API when the row is incomplete.
 
-    Returns ``(row, created_or_refreshed)``. The second value is ``False`` when an existing
-    row already had both ``connection_id`` and ``claim_url`` (no network I/O).
+    Returns ``(row, created_or_refreshed)``. The second value is ``False`` only when the user
+    is already fully onboarded (``onboarding_state`` ``ready`` with claim metadata present);
+    users still ``awaiting_claim`` always re-bootstrap so ``claim_url`` can be renewed.
     """
 
     if not settings.hosted_platform_enabled:
@@ -61,7 +63,8 @@ def ensure_telegram_user_provisioned(
     if existing is not None:
         conn_ok = bool((existing.connection_id or "").strip())
         claim_ok = bool((existing.claim_url or "").strip())
-        if conn_ok and claim_ok:
+        onboarding = (existing.onboarding_state or "").strip()
+        if conn_ok and claim_ok and onboarding == "ready":
             if username is not None and (existing.telegram_username or "") != username:
                 existing.telegram_username = username
             return existing, False
@@ -85,6 +88,15 @@ def ensure_telegram_user_provisioned(
 
     boot = platform.bootstrap(connection_id, template_id)
 
+    def _merge_wallet(addr: str | None) -> None:
+        """Fill wallet_address only when absent (preferred vs overwriting user-corrected data)."""
+
+        if not addr:
+            return
+        if (row.wallet_address or "").strip():
+            return
+        row.wallet_address = addr.strip()
+
     if row is None:
         row = HostedPlatformUserORM(
             telegram_user_id=telegram_user_id,
@@ -94,7 +106,9 @@ def ensure_telegram_user_provisioned(
             onboarding_state="awaiting_claim",
             vault_id=boot.vault_id,
             user_agent_id=boot.user_agent_id,
+            agent_api_key=(boot.agent_api_key or "").strip() or None,
         )
+        _merge_wallet(boot.wallet_address)
         session.add(row)
     else:
         row.telegram_username = username
@@ -103,6 +117,18 @@ def ensure_telegram_user_provisioned(
         row.vault_id = boot.vault_id
         if boot.user_agent_id is not None:
             row.user_agent_id = boot.user_agent_id
+        if boot.agent_api_key is not None and str(boot.agent_api_key).strip():
+            row.agent_api_key = boot.agent_api_key.strip()
+        _merge_wallet(boot.wallet_address)
+
+    # Bootstrap JSON may omit addresses while agent id exists; fetch once when plausible.
+    if platform is not None:
+        maybe_backfill_wallet_from_signing_keys(
+            session,
+            platform,
+            row,
+            reason="post_bootstrap",
+        )
 
     session.flush()
     return row, created_or_refreshed

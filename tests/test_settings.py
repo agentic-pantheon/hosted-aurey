@@ -41,6 +41,7 @@ def test_settings_defaults():
     assert s.hosted_oidc_issuer_url is None
     assert s.hosted_oidc_audience is None
     assert s.hosted_oidc_subject_token_ttl_seconds == 300
+    assert s.hosted_http_admin_token is None
 
 
 def test_settings_env_override(monkeypatch):
@@ -202,3 +203,17 @@ def test_resolve_operator_agent_api_key_missing(monkeypatch):
     s = AureySettings(operator_agent_api_key_secret_source="MISSING_OP")
     with pytest.raises(KeyError):
         s.resolve_operator_agent_api_key()
+
+
+def test_resolve_delegated_actor_falls_back_to_bootstrap(monkeypatch):
+    monkeypatch.delenv("AUREY_OPERATOR_AGENT_API_KEY", raising=False)
+    monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "bootstrap-only")
+    s = AureySettings()
+    assert s.resolve_delegated_actor_api_key() == "bootstrap-only"
+
+
+def test_resolve_delegated_actor_prefers_operator_when_set(monkeypatch):
+    monkeypatch.setenv("AUREY_OPERATOR_AGENT_API_KEY", "ocv-preferred")
+    monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "bootstrap-backup")
+    s = AureySettings()
+    assert s.resolve_delegated_actor_api_key() == "ocv-preferred"

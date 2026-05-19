@@ -28,12 +28,30 @@ class ManagedPostgresCheckpointer:
         self._cm.__exit__(None, None, None)
 
 
+def _conn_string_for_langgraph_raw_psycopg(conn_str: str) -> str:
+    """Strip SQLAlchemy's ``+psycopg`` driver suffix for LangGraph / raw psycopg.
+
+    LangGraph's :class:`~langgraph.checkpoint.postgres.PostgresSaver` passes this
+    string to ``psycopg.Connection.connect``. That parser accepts ``postgresql://``
+    URIs but rejects SQLAlchemy forms like ``postgresql+psycopg://``.
+    """
+
+    url = conn_str.strip()
+    for prefix_sqla, prefix_plain in (
+        ("postgresql+psycopg://", "postgresql://"),
+        ("postgres+psycopg://", "postgres://"),
+    ):
+        if url.startswith(prefix_sqla):
+            return prefix_plain + url[len(prefix_sqla) :]
+    return url
+
+
 def open_postgres_checkpointer(conn_str: str) -> ManagedPostgresCheckpointer:
     """Open ``PostgresSaver`` from URI, run ``setup()`` for DDL, return a closable handle."""
 
     from langgraph.checkpoint.postgres import PostgresSaver
 
-    cm = PostgresSaver.from_conn_string(conn_str.strip())
+    cm = PostgresSaver.from_conn_string(_conn_string_for_langgraph_raw_psycopg(conn_str))
     saver = cm.__enter__()
     try:
         saver.setup()

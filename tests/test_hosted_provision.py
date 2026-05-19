@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from aurey.cloud.models import Base, HostedPlatformUserORM
 from aurey.cloud.platform_client import PlatformBootstrapResult, PlatformUpsertResult
 from aurey.cloud.provision import HostedProvisioningError, ensure_telegram_user_provisioned
+from aurey.graphs.evm_codec import to_checksum_evm_address
 from aurey.settings import AureySettings
 
 
@@ -18,6 +19,7 @@ class _FakePlatform:
     def __init__(self) -> None:
         self.upserts = 0
         self.bootstraps = 0
+        self.signing_keys_calls: list[str] = []
 
     def upsert_user_synthetic_email(
         self,
@@ -36,7 +38,15 @@ class _FakePlatform:
             claim_url=f"https://claim.test/host/{connection_id}",
             vault_id="vault-x",
             user_agent_id="agent-x",
+            agent_api_key="ocv_fake_provision_key",
+            wallet_address=to_checksum_evm_address(
+                "0xdddddddddddddddddddddddddddddddddddddddd",
+            ),
         )
+
+    def get_agent_signing_keys(self, agent_id: str) -> dict:
+        self.signing_keys_calls.append(agent_id)
+        return {"keys": []}
 
 
 def _memory_session():
@@ -46,7 +56,7 @@ def _memory_session():
     return factory(), engine
 
 
-def test_ensure_telegram_user_provisioned_creates_and_skips_network_on_cache() -> None:
+def test_ensure_telegram_user_provisioned_rebootstraps_while_awaiting_claim() -> None:
     settings = AureySettings(
         hosted_platform_enabled=True,
         platform_api_key="plt_fake",
@@ -68,6 +78,49 @@ def test_ensure_telegram_user_provisioned_creates_and_skips_network_on_cache() -
         assert row.claim_url.endswith("/conn-determined")
         assert fake.upserts == 1
         assert fake.bootstraps == 1
+        assert row.wallet_address == to_checksum_evm_address(
+            "0xdddddddddddddddddddddddddddddddddddddddd",
+        )
+        assert row.agent_api_key == "ocv_fake_provision_key"
+        assert fake.signing_keys_calls == []
+
+        row2, refreshed2 = ensure_telegram_user_provisioned(
+            session,
+            settings,
+            fake,
+            telegram_user_id=424242,
+            username="tester",
+        )
+        session.commit()
+        assert refreshed2 is True
+        assert row2.id == row.id
+        assert fake.upserts == 1
+        assert fake.bootstraps == 2
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_ensure_telegram_user_provisioned_skips_network_when_ready() -> None:
+    settings = AureySettings(
+        hosted_platform_enabled=True,
+        platform_api_key="plt_fake",
+        platform_template_id="tmpl_1",
+    )
+    session, engine = _memory_session()
+    try:
+        fake = _FakePlatform()
+        row, refreshed = ensure_telegram_user_provisioned(
+            session,
+            settings,
+            fake,
+            telegram_user_id=424242,
+            username="tester",
+        )
+        session.commit()
+        assert refreshed is True
+        row.onboarding_state = "ready"
+        session.commit()
 
         row2, refreshed2 = ensure_telegram_user_provisioned(
             session,

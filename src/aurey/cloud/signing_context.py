@@ -16,11 +16,16 @@ __all__ = [
 
 @dataclass(frozen=True)
 class HostedSigningContext:
-    """Telegram-hosted user identity for delegated 1Claw intents signing."""
+    """Telegram-hosted user identity for 1Claw intents (agent-token flow).
+
+    ``agent_api_key`` is the per-user ``ocv_`` from bootstrap; ``delegation_subject_token`` is legacy.
+    """
 
     telegram_user_id: int
     user_agent_id: str
-    delegation_subject_token: str
+    delegation_subject_token: str | None = None
+    agent_api_key: str | None = None
+    wallet_address: str | None = None
 
 
 current_hosted_signing_context: ContextVar[HostedSigningContext | None] = ContextVar(

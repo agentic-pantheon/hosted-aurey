@@ -30,6 +30,9 @@ from aurey.graphs.chains import chain_name_for_id
 from aurey.graphs.read import ReadGraphInput
 from aurey.graphs.swap_diag import SWAP_LOG, log_swap_tool
 from aurey.runtime import AureyRuntime
+from aurey.custody.errors import OneClawSigningError, SecretStoreUnavailableError
+from aurey.custody.intents_models import IntentsSignTransactionRequest
+from aurey.custody.intents_principal import OneClawSigningPrincipal
 from aurey.tools.user_input import RequestUserInputArgs, UserQuestion, note_user_input_request
 
 
@@ -39,6 +42,16 @@ def _graph_payload(state: dict[str, Any]) -> dict[str, Any]:
     if err is not None:
         return {"ok": False, "error": err}
     return {"ok": True, "result": res}
+
+
+def _oneclaw_signing_tool_error(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, SecretStoreUnavailableError):
+        return {"code": "secret_unavailable", "message": str(exc)[:800]}
+    if isinstance(exc, OneClawSigningError):
+        return {"code": "oneclaw_signing_error", "message": str(exc)[:800]}
+    if isinstance(exc, ValueError):
+        return {"code": "invalid_input", "message": str(exc)[:800]}
+    return {"code": "internal_error", "message": f"Unexpected signing error ({type(exc).__name__})."}
 
 
 def _parse_chain_id_field(raw: Any) -> int | None:
@@ -484,6 +497,48 @@ class TxExecuteToolArgs(BaseModel):
                 "invalid."
             )
         return self
+
+
+class OneClawSignPersonalMessageArgs(BaseModel):
+    """EIP-191 personal message signing via 1Claw unified ``/sign`` (requires ``message_signing_enabled`` on the agent)."""
+
+    chain: str = Field(min_length=1, description="Chain slug (e.g. base, ethereum).")
+    message: str = Field(
+        min_length=1,
+        description="Human-readable text to sign (UTF-8); Aurey sends it as 0x-hex bytes to 1Claw. "
+        "Use an explicit 0x + even hex string only if you need a pre-encoded byte string.",
+    )
+    signing_key_path: str | None = Field(
+        default=None,
+        description="Optional vault signing key path when multiple keys are configured.",
+    )
+
+
+class OneClawSignTypedDataArgs(BaseModel):
+    """EIP-712 typed data signing via 1Claw unified ``/sign`` (domain allowlist / policy applies)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chain: str = Field(min_length=1, description="Chain slug for the signing intent.")
+    typed_data: dict[str, Any] = Field(
+        description="Full EIP-712 object (``domain``, ``types``, ``primaryType``, ``message``).",
+    )
+    signing_key_path: str | None = Field(
+        default=None,
+        description="Optional vault signing key path when multiple keys are configured.",
+    )
+
+    @model_validator(mode="after")
+    def _typed_nonempty(self) -> Self:
+        if not self.typed_data:
+            raise ValueError("typed_data must be a non-empty object.")
+        return self
+
+
+class OneClawIntentsSignTransactionToolArgs(IntentsSignTransactionRequest):
+    """Tool input for BYORPC ``transactions/sign`` — same fields as Intents, unknown keys rejected."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class TxPrepareNativeArgs(BaseModel):
@@ -1302,6 +1357,139 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         return out
 
     tools.append(tx_execute)
+
+    if (
+        runtime.settings.evm_signing_mode == "oneclaw_intents"
+        and runtime.oneclaw_evm_signer is not None
+    ):
+        signer = runtime.oneclaw_evm_signer
+
+        @tool(args_schema=OneClawSignPersonalMessageArgs)
+        def oneclaw_sign_personal_message(
+            chain: str,
+            message: str,
+            signing_key_path: str | None = None,
+        ) -> dict[str, Any]:
+            """Sign a plaintext message off-chain via 1Claw ``intent_type: personal_sign`` (EIP-191). Does not broadcast.
+
+            Requires the 1Claw agent to have **message signing** enabled by the operator. Use for wallet
+            verification / auth challenges—not for swapping or transferring tokens on-chain."""
+            principal, err = OneClawSigningPrincipal.resolve(runtime)
+            if err is not None:
+                return {"ok": False, "error": err}
+            try:
+                signed = signer.sign_personal_message(
+                    agent_id=principal.agent_id,
+                    chain=chain.strip(),
+                    message=message,
+                    signing_key_path=signing_key_path,
+                    authorization_bearer=principal.authorization_bearer,
+                )
+            except (ValueError, OneClawSigningError, SecretStoreUnavailableError) as exc:
+                return {"ok": False, "error": _oneclaw_signing_tool_error(exc)}
+            return {
+                "ok": True,
+                "result": {
+                    "signature": signed.signature,
+                    "signer_address": signed.signer_address,
+                    "chain": chain.strip(),
+                },
+            }
+
+        @tool(args_schema=OneClawSignTypedDataArgs)
+        def oneclaw_sign_typed_data(
+            chain: str,
+            typed_data: dict[str, Any],
+            signing_key_path: str | None = None,
+        ) -> dict[str, Any]:
+            """Sign structured EIP-712 data via 1Claw unified ``intent_type: typed_data``.
+
+            Permit / Permit2 and similar types require explicit operator allowlisting (**eip712** policy).
+            This does **not** execute on-chain contracts by itself—a separate broadcast path may be needed."""
+            principal, err = OneClawSigningPrincipal.resolve(runtime)
+            if err is not None:
+                return {"ok": False, "error": err}
+            try:
+                signed = signer.sign_typed_data(
+                    agent_id=principal.agent_id,
+                    chain=chain.strip(),
+                    typed_data=typed_data,
+                    signing_key_path=signing_key_path,
+                    authorization_bearer=principal.authorization_bearer,
+                )
+            except (ValueError, OneClawSigningError, SecretStoreUnavailableError) as exc:
+                return {"ok": False, "error": _oneclaw_signing_tool_error(exc)}
+            return {
+                "ok": True,
+                "result": {
+                    "signature": signed.signature,
+                    "signer_address": signed.signer_address,
+                    "chain": chain.strip(),
+                },
+            }
+
+        @tool(args_schema=OneClawIntentsSignTransactionToolArgs)
+        def oneclaw_intents_sign_transaction(
+            chain: str,
+            to: str,
+            value: str = "0",
+            data: str = "0x",
+            signing_key_path: str | None = None,
+            simulate_first: bool | None = None,
+            nonce: int | None = None,
+            gas_limit: int | None = None,
+            gas_price: str | None = None,
+            max_fee_per_gas: str | None = None,
+            max_priority_fee_per_gas: str | None = None,
+        ) -> dict[str, Any]:
+            """Sign-only (BYORPC): build a signed serialized tx via ``POST …/transactions/sign`` without 1Claw broadcast.
+
+            ``value`` is a **decimal ETH string** per Intents API (not wei). Prefer the normal prepare →
+            ``tx_execute`` flow for standard swaps/transfers unless the user explicitly needs a raw signed tx
+            for an external RPC or MEV path."""
+            principal, err = OneClawSigningPrincipal.resolve(runtime)
+            if err is not None:
+                return {"ok": False, "error": err}
+            try:
+                req = IntentsSignTransactionRequest(
+                    chain=chain.strip(),
+                    to=to.strip(),
+                    value=value,
+                    data=data,
+                    signing_key_path=signing_key_path,
+                    simulate_first=simulate_first,
+                    nonce=nonce,
+                    gas_limit=gas_limit,
+                    gas_price=gas_price,
+                    max_fee_per_gas=max_fee_per_gas,
+                    max_priority_fee_per_gas=max_priority_fee_per_gas,
+                )
+                out = signer.intents_sign_transaction(
+                    agent_id=principal.agent_id,
+                    request=req,
+                    authorization_bearer=principal.authorization_bearer,
+                )
+            except (ValueError, OneClawSigningError, SecretStoreUnavailableError) as exc:
+                return {"ok": False, "error": _oneclaw_signing_tool_error(exc)}
+            res: dict[str, Any] = {
+                "signed_tx": out.signed_tx,
+                "tx_hash": out.tx_hash,
+                "status": out.status,
+                "from_address": out.from_address,
+                "chain": out.chain_slug,
+                "chain_id": out.chain_id,
+            }
+            if out.extras:
+                res["extras"] = out.extras
+            return {"ok": True, "result": res}
+
+        tools.extend(
+            [
+                oneclaw_sign_personal_message,
+                oneclaw_sign_typed_data,
+                oneclaw_intents_sign_transaction,
+            ]
+        )
 
     @tool(args_schema=RequestUserInputArgs)
     def request_user_input(questions: list[UserQuestion]) -> dict[str, Any]:

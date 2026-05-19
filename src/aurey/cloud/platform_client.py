@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from aurey.custody.secret_store import _http_error_snippet
+from aurey.graphs.evm_codec import to_checksum_evm_address
 from aurey.settings import AureySettings
 
 _log = logging.getLogger(__name__)
@@ -20,6 +21,10 @@ _DEFAULT_TIMEOUT_S = 20.0
 
 class HostedPlatformApiError(RuntimeError):
     """Platform HTTP or JSON contract failure (safe to log; may include brief response snippet)."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def _dig_mapping(root: Any, *path: str) -> Any:
@@ -70,6 +75,111 @@ def extract_optional_str(payload: Any, *paths: tuple[str, ...]) -> str | None:
     return None
 
 
+def _signing_keys_list_candidates(payload: Any) -> list[Any]:
+    """Return raw list nodes that may hold ``[{chain, address}, ...]`` (bootstrap-style)."""
+
+    if not isinstance(payload, Mapping):
+        return []
+    keys_paths: list[tuple[str, ...]] = (
+        ("summary", "signing_keys"),
+        ("data", "summary", "signing_keys"),
+        ("signing_keys",),
+        ("data", "signing_keys"),
+    )
+    out: list[Any] = []
+    for path in keys_paths:
+        node = _dig_mapping(payload, *path)
+        if isinstance(node, list):
+            out.append(node)
+    return out
+
+
+def _chain_label_ethereum(chain: Any) -> bool:
+    if isinstance(chain, str):
+        c = chain.strip().lower()
+        if not c:
+            return False
+        if c == "ethereum" or c == "eth":
+            return True
+        if "eip155" in c:
+            suffix = c.split(":")[-1]
+            try:
+                return int(suffix) == 1
+            except ValueError:
+                pass
+            return "ethereum" in c
+        return False
+    return False
+
+
+def extract_ethereum_address_from_signing_key_items(items: Any) -> str | None:
+    """First checksummed ``0x`` address from signing-key entries where ``chain`` is Ethereum.
+
+    Intended for bootstrap ``summary.signing_keys`` and ``GET .../signing-keys`` ``keys`` arrays.
+    """
+
+    if not isinstance(items, list):
+        return None
+    eth_items: list[Mapping[str, Any]] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        chain = item.get("chain") or item.get("chain_slug") or item.get("chainSlug")
+        if _chain_label_ethereum(chain):
+            eth_items.append(item)
+    cand = eth_items if eth_items else [x for x in items if isinstance(x, Mapping)]
+
+    for item in cand:
+        if not isinstance(item, Mapping):
+            continue
+        raw = item.get("address") or item.get("evm_address")
+        addr = raw if isinstance(raw, str) else None
+        if not addr or not addr.strip():
+            continue
+        try:
+            return to_checksum_evm_address(addr.strip())
+        except ValueError:
+            continue
+    return None
+
+
+def extract_ethereum_wallet_address_from_bootstrap_payload(payload: Any) -> str | None:
+    """Best-effort Ethereum address from Platform bootstrap JSON (signing_keys blocks)."""
+
+    for lst in _signing_keys_list_candidates(payload):
+        found = extract_ethereum_address_from_signing_key_items(lst)
+        if found is not None:
+            return found
+    return None
+
+
+def extract_signing_keys_array_from_api(payload: Any) -> list[Any] | None:
+    """Normalize ``GET /v1/agents/{id}/signing-keys`` body to the ``keys`` list or None."""
+
+    if isinstance(payload, list):
+        return payload  # tolerant
+    if not isinstance(payload, Mapping):
+        return None
+    keys = payload.get("keys")
+    if isinstance(keys, list):
+        return keys
+    inner = payload.get("data")
+    if isinstance(inner, Mapping):
+        keys2 = inner.get("keys")
+        if isinstance(keys2, list):
+            return keys2
+    return None
+
+
+def ethereum_address_from_signing_keys_payload(payload: Any) -> str | None:
+    """Extract checksummed Ethereum address from signing-keys GET response."""
+
+    arr = extract_signing_keys_array_from_api(payload)
+    if arr is None:
+        return None
+    return extract_ethereum_address_from_signing_key_items(arr)
+
+
 @dataclass(frozen=True)
 class PlatformUpsertResult:
     connection_id: str
@@ -77,9 +187,13 @@ class PlatformUpsertResult:
 
 @dataclass(frozen=True)
 class PlatformBootstrapResult:
+    """Bootstrap output; ``agent_api_key`` is the per-user ``ocv_`` from ``summary.agent_api_key`` when present."""
+
     claim_url: str
     vault_id: str | None = None
     user_agent_id: str | None = None
+    agent_api_key: str | None = None
+    wallet_address: str | None = None
 
 
 class OneClawPlatformClient:
@@ -142,7 +256,8 @@ class OneClawPlatformClient:
                 snippet[:240],
             )
             raise HostedPlatformApiError(
-                f"Platform HTTP {exc.code} for POST {path_suffix} (response preview truncated)."
+                f"Platform HTTP {exc.code} for POST {path_suffix} (response preview truncated).",
+                status_code=int(exc.code),
             ) from exc
         except (OSError, URLError) as exc:
             _log.warning("Platform POST network error url=%s detail=%s", url, type(exc).__name__)
@@ -175,7 +290,8 @@ class OneClawPlatformClient:
                 snippet[:240],
             )
             raise HostedPlatformApiError(
-                f"Platform HTTP {exc.code} for GET {path_suffix} (response preview truncated)."
+                f"Platform HTTP {exc.code} for GET {path_suffix} (response preview truncated).",
+                status_code=int(exc.code),
             ) from exc
         except (OSError, URLError) as exc:
             _log.warning("Platform GET network error url=%s detail=%s", url, type(exc).__name__)
@@ -197,6 +313,21 @@ class OneClawPlatformClient:
         if not isinstance(payload, dict):
             raise HostedPlatformApiError("Platform connection response must be a JSON object.")
         return payload
+
+    def list_app_users(self, app_id: str) -> dict[str, Any] | list[Any]:
+        """GET ``/v1/platform/apps/{app_id}/users`` — returns JSON object or top-level array."""
+
+        aid = (app_id or "").strip()
+        if not aid:
+            raise ValueError("app_id must not be empty.")
+        payload = self._get_json(f"v1/platform/apps/{aid}/users")
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, list):
+            return payload
+        raise HostedPlatformApiError(
+            "Platform app users response must be a JSON object or array.",
+        )
 
     def upsert_user_synthetic_email(
         self,
@@ -240,12 +371,35 @@ class OneClawPlatformClient:
             ("data", "user_agent_id"),
             ("agent_id",),
             ("data", "agent_id"),
+            ("summary", "agent_id"),
+            ("data", "summary", "agent_id"),
+        )
+        wallet_address = extract_ethereum_wallet_address_from_bootstrap_payload(payload)
+        agent_api_key = extract_optional_str(
+            payload,
+            ("summary", "agent_api_key"),
+            ("data", "summary", "agent_api_key"),
+            ("agent_api_key",),
+            ("data", "agent_api_key"),
         )
         return PlatformBootstrapResult(
             claim_url=claim,
             vault_id=vault_id,
             user_agent_id=user_agent_id,
+            agent_api_key=agent_api_key,
+            wallet_address=wallet_address,
         )
+
+    def get_agent_signing_keys(self, agent_id: str) -> dict[str, Any]:
+        """GET ``/v1/agents/{agent_id}/signing-keys``; returns parsed JSON object."""
+
+        aid = (agent_id or "").strip()
+        if not aid:
+            raise ValueError("agent_id must not be empty.")
+        payload = self._get_json(f"v1/agents/{aid}/signing-keys")
+        if not isinstance(payload, dict):
+            raise HostedPlatformApiError("Signing-keys response must be a JSON object.")
+        return payload
 
 
 __all__ = [
@@ -253,6 +407,10 @@ __all__ = [
     "OneClawPlatformClient",
     "PlatformBootstrapResult",
     "PlatformUpsertResult",
+    "ethereum_address_from_signing_keys_payload",
     "extract_claim_url",
     "extract_connection_id",
+    "extract_ethereum_address_from_signing_key_items",
+    "extract_ethereum_wallet_address_from_bootstrap_payload",
+    "extract_signing_keys_array_from_api",
 ]
