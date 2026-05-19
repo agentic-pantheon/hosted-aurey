@@ -8,7 +8,10 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, ValidationError
 
-from aurey.cloud.signing_context import current_hosted_signing_context
+from aurey.cloud.signing_context import (
+    current_hosted_signing_context,
+    hosted_signing_missing_context_graph_error,
+)
 from aurey.custody import OneClawEvmTransactionSigner
 from aurey.custody.errors import (
     SecretNotFoundError,
@@ -137,7 +140,9 @@ def _execute_node(runtime: AureyRuntime, state: TxExecuteGraphState) -> TxExecut
     delegated_bearer: str | None = None
     agent_id: str | None = None
 
-    if settings.hosted_platform_enabled and hctx is not None:
+    if settings.hosted_platform_enabled:
+        if hctx is None:
+            return {"error": hosted_signing_missing_context_graph_error()}
         aid = (hctx.user_agent_id or "").strip()
         if not aid:
             return {

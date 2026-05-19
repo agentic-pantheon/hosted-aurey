@@ -56,3 +56,24 @@ def test_resolve_hosted_errors_when_user_agent_id_missing():
     assert principal is None
     assert err is not None
     assert err.get("code") == "secret_not_configured"
+
+
+def test_resolve_hosted_errors_without_signing_context_even_if_oneclaw_agent_id_set():
+    settings = AureySettings(
+        hosted_platform_enabled=True,
+        evm_signing_mode="oneclaw_intents",
+        oneclaw_agent_id="would-be-legacy",
+    )
+    runtime = AureyRuntime(
+        settings=settings,
+        secret_store=FakeSecretStore({}),
+        evm_rpc_factory=rpc_factory_from_mapping({}),
+        http=ScriptedHttpClient(),
+        tx_pipeline=DeterministicTxPipeline(),
+        lifi_base_url="https://li.quest",
+        oneclaw_evm_signer=FakeOneClawClient(),
+    )
+    principal, err = OneClawSigningPrincipal.resolve(runtime)
+    assert principal is None
+    assert err is not None
+    assert err.get("code") == "hosted_signing_context_required"

@@ -13,6 +13,7 @@ GraphErrorCode = Literal[
     "ens_not_found",
     "unsupported_chain",
     "simulation_failed",
+    "hosted_signing_context_required",
     "secret_not_configured",
     "secret_not_supported",
     "secret_unavailable",

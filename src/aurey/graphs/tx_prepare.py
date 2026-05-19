@@ -7,7 +7,10 @@ from typing import Annotated, Any, Literal, TypedDict
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
-from aurey.cloud.signing_context import current_hosted_signing_context
+from aurey.cloud.signing_context import (
+    current_hosted_signing_context,
+    hosted_signing_missing_context_graph_error,
+)
 from aurey.graphs.chains import chain_id_for, chain_info
 from aurey.graphs.ens_eth import is_zero_address
 from aurey.graphs.evm_codec import erc20_approve_data, erc20_transfer_data, normalize_evm_address
@@ -31,7 +34,9 @@ def _evm_prepare_signing_settings_error(runtime: AureyRuntime) -> dict[str, Any]
             ).model_dump()
     if settings.evm_signing_mode == "oneclaw_intents":
         ctx = current_hosted_signing_context.get()
-        if settings.hosted_platform_enabled and ctx is not None:
+        if settings.hosted_platform_enabled:
+            if ctx is None:
+                return hosted_signing_missing_context_graph_error()
             uid = (ctx.user_agent_id or "").strip()
             if not uid:
                 return GraphErrorBody(

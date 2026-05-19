@@ -403,8 +403,6 @@ def hosted_invoke_bundle_for_telegram_user(
                 pass
         if (row.onboarding_state or "").strip() != "ready":
             return None, extras
-        dst_raw = row.delegation_subject_token
-        dst_out = dst_raw.strip() if isinstance(dst_raw, str) and dst_raw.strip() else None
         enc_raw = row.agent_api_key_encrypted
         enc_out = enc_raw.strip() if isinstance(enc_raw, str) and enc_raw.strip() else None
         leg_raw = row.agent_api_key
@@ -412,7 +410,6 @@ def hosted_invoke_bundle_for_telegram_user(
         ctx = HostedSigningContext(
             telegram_user_id=tid,
             user_agent_id=(row.user_agent_id or "").strip(),
-            delegation_subject_token=dst_out,
             agent_api_key_encrypted=enc_out,
             agent_api_key_legacy_plaintext=leg_out,
             wallet_address=extras.get("hosted_wallet_address"),
@@ -621,94 +618,6 @@ def build_telegram_application(
 
         await msg.reply_text("Aurey is ready. Send a message to invoke the agent.")
 
-    async def delegation_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Persist a delegation subject token for a hosted user (**staging**: plaintext DB)."""
-
-        msg = update.effective_message
-        if msg is None:
-            return
-        cfg = state.settings
-        if not cfg.hosted_platform_enabled:
-            return
-        db_url = (cfg.database_url or "").strip()
-        if not db_url or state.hosted_session_factory is None:
-            await msg.reply_text("Hosted database is not configured.")
-            return
-        admins = cfg.hosted_admin_telegram_user_id_allowlist
-        if not admins:
-            await msg.reply_text(
-                "Delegation grant is disabled (set AUREY_HOSTED_ADMIN_TELEGRAM_USER_IDS)."
-            )
-            return
-        actor = update.effective_user
-        if actor is None or actor.id not in admins:
-            await msg.reply_text("You are not authorized to grant delegation tokens.")
-            return
-
-        args: list[str] = list(context.args) if context.args else []
-        reply = msg.reply_to_message
-        target_id: int | None = None
-        token = ""
-        if reply is not None and reply.from_user is not None:
-            target_id = int(reply.from_user.id)
-            token = " ".join(args).strip()
-        elif len(args) >= 2:
-            try:
-                target_id = int(args[0])
-            except ValueError:
-                await msg.reply_text("telegram_user_id must be an integer.")
-                return
-            token = " ".join(args[1:]).strip()
-        else:
-            await msg.reply_text(
-                "Usage: reply to a user with /delegation_grant <subject_token>, or "
-                "/delegation_grant <telegram_user_id> <subject_token>.\n\n"
-                "Staging warning: tokens are stored in plaintext in the database."
-            )
-            return
-        if not token:
-            await msg.reply_text("Missing subject token.")
-            return
-        assert target_id is not None
-
-        from sqlalchemy import select
-
-        from aurey.cloud.models import HostedPlatformUserORM
-
-        def _persist() -> str:
-            factory = state.hosted_session_factory
-            assert factory is not None
-            session = factory()
-            try:
-                row = session.execute(
-                    select(HostedPlatformUserORM).where(
-                        HostedPlatformUserORM.telegram_user_id == target_id,
-                    ),
-                ).scalar_one_or_none()
-                if row is None:
-                    return "missing"
-                row.delegation_subject_token = token
-                session.commit()
-                return "ok"
-            except Exception:
-                session.rollback()
-                raise
-            finally:
-                session.close()
-
-        try:
-            outcome = await asyncio.to_thread(_persist)
-        except Exception:
-            gate_log.exception("delegation_grant persistence failed")
-            await msg.reply_text("Could not save token; see logs.")
-            return
-        if outcome == "missing":
-            await msg.reply_text("No hosted_platform_users row for that Telegram user id.")
-            return
-        await msg.reply_text(
-            "Delegation subject token saved (staging only — stored as plaintext in the database)."
-        )
-
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         msg = update.effective_message
         if msg is None or not msg.text:
@@ -863,8 +772,6 @@ def build_telegram_application(
 
     app = Application.builder().token(bot_token).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("grant", delegation_grant))
-    app.add_handler(CommandHandler("delegation_grant", delegation_grant))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
 
     _telegram_log = logging.getLogger("aurey.telegram.bot")

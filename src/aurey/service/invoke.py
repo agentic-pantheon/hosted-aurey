@@ -76,13 +76,19 @@ def _resolve_hosted_wallet_address_hint(
     context: dict[str, Any],
     *,
     hosted_signing_context: HostedSigningContext | None,
+    hosted_platform_enabled: bool,
 ) -> str | None:
-    """Return checksummed EVM wallet from invoke context vars or signing context."""
+    """Return checksummed EVM wallet from invoke context or signing context.
+
+    When ``hosted_platform_enabled``, ignore client-supplied ``hosted_wallet_address`` in
+    ``context`` (HTTP invoke must not steer the binding).
+    """
 
     raw: str | None = None
-    v = context.get("hosted_wallet_address")
-    if isinstance(v, str) and v.strip():
-        raw = v.strip()
+    if not hosted_platform_enabled:
+        v = context.get("hosted_wallet_address")
+        if isinstance(v, str) and v.strip():
+            raw = v.strip()
     if not raw and hosted_signing_context is not None:
         w = (hosted_signing_context.wallet_address or "").strip()
         raw = w or None
@@ -195,6 +201,7 @@ def invoke_deep_agent_turn(
     hosted_wallet_resolved = _resolve_hosted_wallet_address_hint(
         merged_context,
         hosted_signing_context=hosted_signing_context,
+        hosted_platform_enabled=bool(svc.settings.hosted_platform_enabled),
     )
     if hosted_wallet_resolved:
         merged_context["hosted_wallet_address"] = hosted_wallet_resolved

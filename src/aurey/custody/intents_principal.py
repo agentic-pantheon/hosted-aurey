@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from aurey.cloud.signing_context import current_hosted_signing_context
+from aurey.cloud.signing_context import (
+    current_hosted_signing_context,
+    hosted_signing_missing_context_tool_error,
+)
 from aurey.runtime import AureyRuntime
 
 
@@ -32,7 +35,9 @@ class OneClawSigningPrincipal:
             }
 
         hctx = current_hosted_signing_context.get()
-        if settings.hosted_platform_enabled and hctx is not None:
+        if settings.hosted_platform_enabled:
+            if hctx is None:
+                return None, hosted_signing_missing_context_tool_error()
             aid = (hctx.user_agent_id or "").strip()
             if not aid:
                 return None, {

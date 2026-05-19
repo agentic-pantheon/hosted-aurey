@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import secrets
+import hashlib
+import hmac
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -57,9 +58,10 @@ def _hosted_http_bearer_matches_configured(admin_token: str, authorization_heade
     if not auth.lower().startswith("bearer "):
         return False
     got = auth[7:].strip()
-    if len(got) != len(ct):
-        return False
-    return secrets.compare_digest(got.encode("utf-8"), ct.encode("utf-8"))
+    return hmac.compare_digest(
+        hashlib.sha256(ct.encode("utf-8")).digest(),
+        hashlib.sha256(got.encode("utf-8")).digest(),
+    )
 
 
 def create_fastapi_application(

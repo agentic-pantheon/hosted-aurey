@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import io
 import json
 from collections.abc import Callable
@@ -234,6 +235,33 @@ def test_oneclaw_http_sign_retries_once_on_401():
     assert len(captured) == 4
 
 
+def test_oneclaw_http_bearer_for_agent_parallel_agents_distinct_tokens():
+    """JWT cache must not mix tokens across agent_ids under concurrent refresh."""
+
+    def dynamic_urlopen(request: Request, timeout: float | None = None) -> _FakeResponse:
+        if request.data:
+            body = json.loads(request.data.decode())
+            aid = str(body.get("agent_id", ""))
+        else:
+            aid = "?"
+        tok = f"jwt-for-{aid}"
+        return _FakeResponse(json.dumps({"access_token": tok, "expires_in": 3600}).encode())
+
+    with patch("aurey.custody.secret_store.urlopen", side_effect=dynamic_urlopen):
+        client = OneClawHttpClient(base_url="https://claw.test", api_key="k")
+
+        def fetch(aid: str) -> str:
+            return client._bearer_for_agent(aid)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+            futures = []
+            for i in range(48):
+                aid = f"agent-{i % 3}"
+                futures.append((aid, pool.submit(fetch, aid)))
+            for aid, fut in futures:
+                assert fut.result() == f"jwt-for-{aid}"
+
+
 def test_oneclaw_http_sign_validates_agent_and_chain():
     client = OneClawHttpClient(base_url="https://claw.test", api_key="k")
     with pytest.raises(ValueError, match="non-empty"):
@@ -390,57 +418,6 @@ def test_oneclaw_http_sign_skips_agent_token_when_authorization_bearer_set():
     assert captured[0].get_full_url() == "https://claw.test/v1/agents/my-agent/sign"
     auth = next(v for h, v in captured[0].header_items() if h.lower() == "authorization")
     assert auth == "Bearer preissued-jwt"
-
-
-def test_oneclaw_http_post_delegated_token_caches_per_subject_fingerprint_and_agent():
-    captured: list[Request] = []
-    subject = "subject-secret-token"
-    actions = [
-        json.dumps({"access_token": "jwt-d1", "expires_in": 3600}).encode(),
-        json.dumps({"access_token": "jwt-d2", "expires_in": 3600}).encode(),
-    ]
-    mono = MagicMock(return_value=1000.0)
-    with (
-        patch(
-            "aurey.custody.secret_store.urlopen",
-            side_effect=_make_urlopen_mock(actions, captured),
-        ),
-        patch("aurey.custody.secret_store.time.monotonic", mono),
-    ):
-        client = OneClawHttpClient(
-            base_url="https://claw.test",
-            api_key="k",
-            agent_token_expiry_skew_seconds=60.0,
-        )
-        t1 = client.post_delegated_access_token(
-            actor_token="act",
-            subject_token=subject,
-            scope="scopes/x",
-            agent_id="ag1",
-        )
-        t2 = client.post_delegated_access_token(
-            actor_token="act",
-            subject_token=subject,
-            scope="scopes/x",
-            agent_id="ag1",
-        )
-        t3 = client.post_delegated_access_token(
-            actor_token="act",
-            subject_token=subject,
-            scope="scopes/x",
-            agent_id="ag2",
-        )
-
-    assert t1 == t2 == "jwt-d1"
-    assert t3 == "jwt-d2"
-    assert len(captured) == 2
-    assert all(r.get_full_url() == "https://claw.test/v1/auth/delegated-token" for r in captured)
-    body0 = json.loads(captured[0].data.decode())
-    assert body0 == {
-        "subject_token": subject,
-        "actor_token": "act",
-        "scope": "scopes/x",
-    }
 
 
 def test_fake_oneclaw_client_personal_typed_intents_cover_protocol():

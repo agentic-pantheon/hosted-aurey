@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
+import threading
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -61,12 +63,17 @@ def _personal_sign_message_payload_hex(message: str) -> str:
 def _http_error_snippet(exc: HTTPError, *, max_len: int = 800) -> str:
     """Best-effort read of error response body without failing the caller."""
 
+    def _redact(s: str) -> str:
+        out = re.sub(r"\bocv_[A-Za-z0-9_-]+\b", "ocv_[REDACTED]", s)
+        out = re.sub(r"\bplt_[A-Za-z0-9_-]+\b", "plt_[REDACTED]", out)
+        return out
+
     try:
         fp = getattr(exc, "fp", None)
         if fp is not None and hasattr(fp, "read"):
             raw = fp.read()
             if raw:
-                return raw.decode("utf-8", errors="replace").strip()[:max_len]
+                return _redact(raw.decode("utf-8", errors="replace").strip())[:max_len]
     except Exception:
         pass
     return ""
@@ -356,7 +363,7 @@ class OneClawHttpClient:
         self._access_token_agent: str | None = None
         self._access_token_api_key_fp: str | None = None
         self._access_token_expires_at: float | None = None
-        self._delegated_access_tokens: dict[tuple[str, str], tuple[str, float | None]] = {}
+        self._agent_jwt_lock = threading.RLock()
 
     def get_secret(self, *, vault_id: str, path: str, agent_id: str | None = None) -> str:
         """Read a secret value from 1Claw without exposing it in errors."""
@@ -488,7 +495,21 @@ class OneClawHttpClient:
             return default
         if hctx is None:
             return default
-        if (hctx.user_agent_id or "").strip() != ag:
+        ctx_agent = (hctx.user_agent_id or "").strip()
+        if ctx_agent != ag:
+            if self._hosted_settings_for_ocv is not None:
+                _log.warning(
+                    "hosted signing context user_agent_id mismatch (context=%r request=%r)",
+                    ctx_agent or None,
+                    ag,
+                )
+                raise SecretStoreUnavailableError(
+                    "/v1/auth/agent-token",
+                    store_name="1Claw",
+                    detail=(
+                        "Hosted signing context user_agent_id does not match the requested agent_id."
+                    ),
+                )
             return default
 
         hosted_settings = self._hosted_settings_for_ocv
@@ -586,150 +607,30 @@ class OneClawHttpClient:
         return self._access_token
 
     def _bearer_for_agent(self, agent_id: str) -> str:
-        ag = agent_id.strip()
-        api_key = self._resolve_agent_token_api_key(ag)
-        fp = _agent_token_api_key_fingerprint(api_key)
-        if (
-            self._access_token
-            and self._access_token_agent == ag
-            and self._access_token_api_key_fp == fp
-        ):
+        with self._agent_jwt_lock:
+            ag = agent_id.strip()
+            api_key = self._resolve_agent_token_api_key(ag)
+            fp = _agent_token_api_key_fingerprint(api_key)
             if (
-                self._access_token_expires_at is not None
-                and time.monotonic() >= self._access_token_expires_at
+                self._access_token
+                and self._access_token_agent == ag
+                and self._access_token_api_key_fp == fp
             ):
-                _log.info(
-                    "1Claw cached agent token past expires_in window (skew=%ss); refreshing "
-                    "agent_id=%s",
-                    self._agent_token_expiry_skew_seconds,
-                    ag,
-                )
-                self._invalidate_access_token(ag)
-            else:
-                _log.debug("1Claw reusing cached access token agent_id=%s", ag)
-                return self._access_token
-        return self._fetch_access_token(ag, api_key=api_key)
-
-    def post_delegated_access_token(
-        self,
-        *,
-        actor_token: str,
-        subject_token: str,
-        scope: str,
-        agent_id: str,
-    ) -> str:
-        """Exchange subject grant + operator actor token for a short-lived bearer JWT.
-
-        Calls ``POST /v1/auth/delegated-token``.
-        """
-
-        ag = agent_id.strip()
-        if not ag:
-            raise ValueError("agent_id must be non-empty for delegated token exchange.")
-        sub_stripped = subject_token.strip()
-        if not sub_stripped:
-            raise ValueError("subject_token must be non-empty.")
-        actor_stripped = actor_token.strip()
-        if not actor_stripped:
-            raise ValueError("actor_token must be non-empty.")
-        scope_stripped = (scope or "").strip()
-        if not scope_stripped:
-            raise ValueError("scope must be non-empty.")
-
-        fp = delegated_subject_fingerprint(sub_stripped)
-        cache_key = (fp, ag)
-        now_m = time.monotonic()
-        cached = self._delegated_access_tokens.get(cache_key)
-        if cached is not None:
-            tok, exp_at = cached
-            if exp_at is None or now_m < exp_at:
-                _log.debug(
-                    "1Claw reusing cached delegated JWT fp16=%s agent_id=%s",
-                    fp,
-                    ag,
-                )
-                return tok
-
-        url = f"{self._base_url}/v1/auth/delegated-token"
-        _log.info(
-            "1Claw requesting delegated access token POST %s fp16=%s agent_id=%s",
-            url,
-            fp,
-            ag,
-        )
-        body = json.dumps(
-            {
-                "subject_token": sub_stripped,
-                "actor_token": actor_stripped,
-                "scope": scope_stripped,
-            },
-            separators=(",", ":"),
-        ).encode("utf-8")
-        request = Request(
-            url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urlopen(request, timeout=10) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except HTTPError as exc:
-            _log.warning(
-                "1Claw POST delegated-token failed HTTP %s url=%s fp16=%s agent_id=%s "
-                "response_body_preview=%s",
-                exc.code,
-                url,
-                fp,
-                ag,
-                _http_error_snippet(exc, max_len=240),
-            )
-            raise SecretStoreUnavailableError(
-                "/v1/auth/delegated-token",
-                store_name="1Claw",
-                detail=(
-                    f"Delegated token exchange failed with HTTP {exc.code}. "
-                    "Check operator agent API key, subject token, and 1Claw availability."
-                ),
-            ) from exc
-        except (OSError, URLError, json.JSONDecodeError) as exc:
-            _log.warning(
-                "1Claw POST delegated-token failed (network/json) url=%s fp16=%s "
-                "agent_id=%s err=%s",
-                url,
-                fp,
-                ag,
-                type(exc).__name__,
-            )
-            raise SecretStoreUnavailableError(
-                "/v1/auth/delegated-token",
-                store_name="1Claw",
-                detail="Delegated token exchange failed (network error or invalid JSON).",
-            ) from exc
-
-        token = payload.get("access_token")
-        if not isinstance(token, str) or not token.strip():
-            raise SecretStoreUnavailableError(
-                "/v1/auth/delegated-token",
-                store_name="1Claw",
-                detail="Delegated token response contained no usable `access_token`.",
-            )
-
-        jwt = token.strip()
-        expires_at: float | None = None
-        expires_raw = payload.get("expires_in")
-        if isinstance(expires_raw, (int, float)) and float(expires_raw) > 0:
-            ttl = float(expires_raw) - self._agent_token_expiry_skew_seconds
-            expires_at = time.monotonic() + max(0.0, ttl)
-        self._delegated_access_tokens[cache_key] = (jwt, expires_at)
-        _log.info(
-            "1Claw delegated JWT cached fp16=%s agent_id=%s (value not logged; expires_in-based "
-            "refresh=%s)",
-            fp,
-            ag,
-            "yes" if expires_at is not None else "no (refresh on 401 only)",
-        )
-        return jwt
+                if (
+                    self._access_token_expires_at is not None
+                    and time.monotonic() >= self._access_token_expires_at
+                ):
+                    _log.info(
+                        "1Claw cached agent token past expires_in window (skew=%ss); refreshing "
+                        "agent_id=%s",
+                        self._agent_token_expiry_skew_seconds,
+                        ag,
+                    )
+                    self._invalidate_access_token(ag)
+                else:
+                    _log.debug("1Claw reusing cached access token agent_id=%s", ag)
+                    return self._access_token
+            return self._fetch_access_token(ag, api_key=api_key)
 
     def _secret_url_path_suffix(self, path: str) -> str:
         normalized = path.strip().lstrip("/")
@@ -743,7 +644,8 @@ class OneClawHttpClient:
             return self._http_get_secret_value(vault_id, path, bearer)
         except HTTPError as exc:
             if exc.code == 401:
-                self._invalidate_access_token(agent_id)
+                with self._agent_jwt_lock:
+                    self._invalidate_access_token(agent_id)
                 bearer = self._bearer_for_agent(agent_id)
                 return self._http_get_secret_value(vault_id, path, bearer)
             if exc.code == 404:
@@ -1067,7 +969,8 @@ class OneClawHttpClient:
             return _post_json(bearer_token)
         except HTTPError as exc:
             if exc.code == 401:
-                self._invalidate_access_token(ag)
+                with self._agent_jwt_lock:
+                    self._invalidate_access_token(ag)
                 bearer_token = self._bearer_for_agent(ag)
                 try:
                     return _post_json(bearer_token)
@@ -1121,7 +1024,6 @@ class FakeOneClawClient:
         typed_data_exception: Exception | None = None,
         intents_sign_response: OneClawIntentsSignOnlyResult | None = None,
         intents_sign_exception: Exception | None = None,
-        delegated_jwt: str = "delegated-jwt-test",
     ) -> None:
         self._secrets = dict(secrets or {})
         self.requests: list[dict[str, str | None]] = []
@@ -1133,12 +1035,10 @@ class FakeOneClawClient:
         self._typed_data_exception = typed_data_exception
         self._intents_sign_response = intents_sign_response
         self._intents_sign_exception = intents_sign_exception
-        self._delegated_jwt = delegated_jwt
         self.sign_requests: list[dict[str, Any]] = []
         self.personal_sign_calls: list[dict[str, Any]] = []
         self.typed_data_calls: list[dict[str, Any]] = []
         self.intents_sign_calls: list[dict[str, Any]] = []
-        self.delegated_calls: list[dict[str, str]] = []
         self.put_human_calls: list[dict[str, Any]] = []
 
     def get_secret(self, *, vault_id: str, path: str, agent_id: str | None = None) -> str:
@@ -1168,24 +1068,6 @@ class FakeOneClawClient:
             }
         )
         self._secrets[path.strip()] = value
-
-    def post_delegated_access_token(
-        self,
-        *,
-        actor_token: str,
-        subject_token: str,
-        scope: str,
-        agent_id: str,
-    ) -> str:
-        self.delegated_calls.append(
-            {
-                "actor_token": actor_token,
-                "subject_token": subject_token,
-                "scope": scope,
-                "agent_id": agent_id,
-            }
-        )
-        return self._delegated_jwt
 
     def sign_evm_transaction(
         self,

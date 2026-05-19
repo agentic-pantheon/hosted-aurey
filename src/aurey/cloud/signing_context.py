@@ -6,12 +6,46 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from typing import Any
+
+HOSTED_SIGNING_CONTEXT_REQUIRED_CODE = "hosted_signing_context_required"
 
 __all__ = [
+    "HOSTED_SIGNING_CONTEXT_REQUIRED_CODE",
     "HostedSigningContext",
     "current_hosted_signing_context",
+    "hosted_signing_missing_context_graph_error",
+    "hosted_signing_missing_context_tool_error",
     "hosted_signing_context_scope",
 ]
+
+
+def hosted_signing_missing_context_message() -> str:
+    return (
+        "Hosted mode requires a bound Telegram signing context (provisioned user_agent_id). "
+        "HTTP invoke without that binding cannot use oneclaw_intents signing."
+    )
+
+
+def hosted_signing_missing_context_tool_error() -> dict[str, str]:
+    """Error dict for ``OneClawSigningPrincipal`` and tool surfaces."""
+
+    return {
+        "code": HOSTED_SIGNING_CONTEXT_REQUIRED_CODE,
+        "message": hosted_signing_missing_context_message(),
+    }
+
+
+def hosted_signing_missing_context_graph_error() -> dict[str, Any]:
+    """``GraphErrorBody``-shaped dict for LangGraph nodes."""
+
+    from aurey.graphs.results import GraphErrorBody
+
+    return GraphErrorBody(
+        code="hosted_signing_context_required",
+        message=hosted_signing_missing_context_message(),
+        details=None,
+    ).model_dump()
 
 
 @dataclass(frozen=True)
@@ -20,12 +54,10 @@ class HostedSigningContext:
 
     ``agent_api_key_encrypted`` holds Fernet ciphertext from Postgres (backup).
     ``agent_api_key_legacy_plaintext`` is deprecated plaintext DB fallback until migrated.
-    ``delegation_subject_token`` is legacy optional delegation material.
     """
 
     telegram_user_id: int
     user_agent_id: str
-    delegation_subject_token: str | None = None
     agent_api_key_encrypted: str | None = None
     agent_api_key_legacy_plaintext: str | None = None
     wallet_address: str | None = None

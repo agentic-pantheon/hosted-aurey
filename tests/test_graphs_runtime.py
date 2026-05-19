@@ -1186,6 +1186,29 @@ def test_tx_prepare_oneclaw_intents_requires_agent_id():
     assert "oneclaw_agent_id" in out["error"]["message"]
 
 
+def test_tx_prepare_hosted_requires_signing_context():
+    settings = AureySettings(
+        evm_signing_mode="oneclaw_intents",
+        hosted_platform_enabled=True,
+        oneclaw_agent_id="must-not-use",
+        wallet_signing_key_secret_path=None,
+    )
+    runtime = _runtime(secrets={}, settings=settings, http=ScriptedHttpClient(), rpc_map={})
+    out = build_tx_prepare_graph(runtime).invoke(
+        {
+            "input": {
+                "kind": "native_transfer",
+                "chain": "base",
+                "from_address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "to_address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "value_wei": 1,
+            }
+        }
+    )
+    assert out.get("result") is None
+    assert out["error"]["code"] == "hosted_signing_context_required"
+
+
 def test_tx_prepare_oneclaw_intents_native_envelope():
     settings = AureySettings(
         evm_signing_mode="oneclaw_intents",

@@ -53,7 +53,7 @@ See [.env.example](../.env.example) and [`api_key_resolution`](../src/aurey/grap
 
 ## 7. Hosted intents auth (bootstrap + per-user agent)
 
-For each Telegram user, once provisioning has a **`user_agent_id`**, Aurey obtains a JWT via **`POST /v1/auth/agent-token`**. The `api_key` in that request is resolved in order:
+For each Telegram user, once provisioning has a **`user_agent_id`**, Aurey obtains a JWT via **`POST /v1/auth/agent-token`**. The `OneClawHttpClient` caches those JWTs behind a **reentrant mutex** (safe under concurrent Telegram workers). The `api_key` in that request is resolved in order:
 
 1. **Operator vault** — `POST .../secrets:resolve` with **`AUREY_ONECLAW_BOOTSTRAP_API_KEY`** as Bearer reads **`{AUREY_HOSTED_AGENT_API_KEY_PATH_PREFIX}/{user_agent_id}/agent_api_key`** (default prefix `hosted/agents`) under **`AUREY_ONECLAW_VAULT_ID`** or **`AUREY_HOSTED_AGENT_API_KEY_VAULT_ID`** when set.
 2. **Encrypted Postgres backup** — Fernet ciphertext in **`hosted_platform_users.agent_api_key_encrypted`** when **`AUREY_HOSTED_SECRETS_MASTER_KEY`** is configured (generate key via `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
@@ -64,9 +64,11 @@ On bootstrap, when **`summary.agent_api_key`** is present, Aurey **dual-writes**
 
 **`plt_`** keys are only for Platform routes (upsert, bootstrap), not for `agent-token`.
 
-**Legacy / optional:** The `hosted_platform_users.delegation_subject_token` column and Telegram **`/grant`** / **`/delegation_grant`** (when **`AUREY_HOSTED_ADMIN_TELEGRAM_USER_IDS`** is set) may still persist earlier **staging** subject tokens; they are **not** required for `oneclaw_intents` prepare/execute/tools when using the operator bootstrap key with template agents.
-
 Set **`AUREY_OPERATOR_AGENT_API_KEY`** only if your 1Claw setup uses a distinct operator credential from the bootstrap API key.
+
+### Plaintext `agent_api_key` column after migration
+
+Once **`agent_api_key_encrypted`** is populated and/or vault PUT succeeded for a row, operators should **`UPDATE hosted_platform_users SET agent_api_key = NULL`** where plaintext is no longer needed, so backups do not retain duplicate material.
 
 ## 8. Per-user EVM address + admin wallet sync
 

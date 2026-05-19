@@ -17,7 +17,7 @@ def test_tx_execute_hosted_uses_agent_token_path_no_delegated_exchange(monkeypat
 
     monkeypatch.setenv("AUREY_OPERATOR_AGENT_API_KEY", "ocv_operator_test")
 
-    oneclaw = FakeOneClawClient(delegated_jwt="unused-in-hosted-path")
+    oneclaw = FakeOneClawClient()
     settings = AureySettings(
         hosted_platform_enabled=True,
         evm_signing_mode="oneclaw_intents",
@@ -53,19 +53,49 @@ def test_tx_execute_hosted_uses_agent_token_path_no_delegated_exchange(monkeypat
 
     assert "error" not in out
     assert out["result"]["tx_hash"].startswith("0x")
-    assert len(oneclaw.delegated_calls) == 0
     assert len(oneclaw.sign_requests) == 1
     assert oneclaw.sign_requests[0].get("authorization_bearer") is None
     assert oneclaw.sign_requests[0]["agent_id"] == "user-agent-99"
 
 
-def test_tx_execute_hosted_works_without_legacy_delegation_subject_token(monkeypatch):
-    """Explicit empty/legacy delegation field does not trigger delegated-token POST."""
+def test_tx_execute_hosted_requires_signing_context(monkeypatch):
+    monkeypatch.delenv("AUREY_OPERATOR_AGENT_API_KEY", raising=False)
 
+    settings = AureySettings(
+        hosted_platform_enabled=True,
+        evm_signing_mode="oneclaw_intents",
+        oneclaw_agent_id="must-not-be-used",
+    )
+    runtime = AureyRuntime(
+        settings=settings,
+        secret_store=FakeSecretStore({}),
+        evm_rpc_factory=rpc_factory_from_mapping({}),
+        http=ScriptedHttpClient(),
+        tx_pipeline=DeterministicTxPipeline(),
+        lifi_base_url="https://li.quest",
+        oneclaw_evm_signer=FakeOneClawClient(),
+    )
+    graph = build_tx_execute_graph(runtime)
+    envelope = {
+        "kind": "native_transfer",
+        "chain_id": 8453,
+        "from_address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "to": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "data": "0x",
+        "value_hex": "0x1",
+        "signing_mode": "oneclaw_intents",
+        "signing_key_secret_path": None,
+    }
+    out = graph.invoke({"input": {"envelope": envelope}})
+    assert out.get("result") is None
+    assert out["error"]["code"] == "hosted_signing_context_required"
+
+
+def test_tx_execute_hosted_signs_with_user_agent_context(monkeypatch):
     monkeypatch.delenv("AUREY_OPERATOR_AGENT_API_KEY", raising=False)
     monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "same-as-operator-bootstrap")
 
-    oneclaw = FakeOneClawClient(delegated_jwt="unused")
+    oneclaw = FakeOneClawClient()
     settings = AureySettings(
         hosted_platform_enabled=True,
         evm_signing_mode="oneclaw_intents",
@@ -94,11 +124,9 @@ def test_tx_execute_hosted_works_without_legacy_delegation_subject_token(monkeyp
     ctx = HostedSigningContext(
         telegram_user_id=1,
         user_agent_id="agent-42",
-        delegation_subject_token=None,
     )
     with hosted_signing_context_scope(ctx):
         out = graph.invoke({"input": {"envelope": envelope}})
 
     assert "error" not in out
-    assert len(oneclaw.delegated_calls) == 0
     assert oneclaw.sign_requests[0].get("authorization_bearer") is None
