@@ -42,13 +42,21 @@ def _kv_line(**parts: str | int | UUID | None) -> str:
 
 
 def agent_trace_detail() -> str | None:
-    """Return ``\"info\"``, ``\"debug\"``, or ``None`` (off) from ``AUREY_AGENT_TRACE``."""
+    """Return trace level from ``AUREY_AGENT_TRACE``.
+
+    - ``None``: off
+    - ``\"minimal\"``: tool/LLM boundaries and errors only (no large tool payloads)
+    - ``\"info\"``: default; tool I/O clipped to 2000 chars
+    - ``\"debug\"``: all graph nodes, per-token stream, verbose LLM metadata
+    """
 
     raw = os.environ.get("AUREY_AGENT_TRACE", "").strip().lower()
     if not raw or raw in ("0", "false", "no", "off"):
         return None
     if raw in ("debug", "verbose", "2"):
         return "debug"
+    if raw in ("minimal", "lite", "warn"):
+        return "minimal"
     return "info"
 
 
@@ -61,6 +69,10 @@ def build_agent_trace_handler(*, session_id: str) -> BaseCallbackHandler | None:
     return AureyAgentTraceHandler(session_id=session_id, detail=detail)
 
 
+_TOOL_IO_CLIP_INFO = 2000
+_TOOL_IO_CLIP_MINIMAL = 280
+
+
 class AureyAgentTraceHandler(BaseCallbackHandler):
     """Logs graph node transitions (from LangGraph metadata), tool boundaries, and LLM stream."""
 
@@ -68,6 +80,11 @@ class AureyAgentTraceHandler(BaseCallbackHandler):
         super().__init__()
         self._session_id = session_id
         self._detail = detail
+
+    def _tool_io_clip(self) -> int:
+        if self._detail == "minimal":
+            return _TOOL_IO_CLIP_MINIMAL
+        return _TOOL_IO_CLIP_INFO
 
     def _meta(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         m = kwargs.get("metadata")
@@ -125,15 +142,21 @@ class AureyAgentTraceHandler(BaseCallbackHandler):
     ) -> Any:
         meta = self._meta(kwargs)
         tool_name = (serialized or {}).get("name") if isinstance(serialized, dict) else None
-        line = _kv_line(
-            session=self._session_id,
-            event="tool_start",
-            run_id=str(run_id)[:8],
-            tool=tool_name,
-            graph_node=meta.get("langgraph_node"),
-            graph_step=meta.get("langgraph_step"),
-            input=_clip(input_str or "", 2000),
-        )
+        parts: dict[str, str | int | UUID | None] = {
+            "session": self._session_id,
+            "event": "tool_start",
+            "run_id": str(run_id)[:8],
+            "tool": tool_name,
+            "graph_node": meta.get("langgraph_node"),
+            "graph_step": meta.get("langgraph_step"),
+        }
+        if self._detail != "minimal":
+            parts["input"] = _clip(input_str or "", self._tool_io_clip())
+        else:
+            n = len(input_str or "")
+            if n:
+                parts["input_chars"] = n
+        line = _kv_line(**parts)
         _log.info("agent_trace  %s", line)
 
     def on_tool_end(
@@ -144,14 +167,24 @@ class AureyAgentTraceHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         meta = self._meta(kwargs)
-        line = _kv_line(
-            session=self._session_id,
-            event="tool_end",
-            run_id=str(run_id)[:8],
-            graph_node=meta.get("langgraph_node"),
-            graph_step=meta.get("langgraph_step"),
-            output=_clip(output, 2000),
-        )
+        parts = {
+            "session": self._session_id,
+            "event": "tool_end",
+            "run_id": str(run_id)[:8],
+            "graph_node": meta.get("langgraph_node"),
+            "graph_step": meta.get("langgraph_step"),
+        }
+        if self._detail != "minimal":
+            parts["output"] = _clip(str(output), self._tool_io_clip())
+        else:
+            out_s = str(output)
+            parts["output_chars"] = len(out_s)
+            if isinstance(output, dict) and output.get("ok") is not None:
+                parts["ok"] = str(output.get("ok"))
+            err = output.get("error") if isinstance(output, dict) else None
+            if isinstance(err, dict) and err.get("code"):
+                parts["error_code"] = str(err.get("code"))
+        line = _kv_line(**parts)
         _log.info("agent_trace  %s", line)
 
     def on_tool_error(

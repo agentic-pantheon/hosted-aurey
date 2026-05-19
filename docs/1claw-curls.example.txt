@@ -1,0 +1,116 @@
+# 1Claw Platform API — example curls (no secrets)
+#
+# Copy to repo root for a local scratch pad (gitignored):
+#   cp docs/1claw-curls.example.txt ../1claw-curls.txt
+#
+# Set keys from env (never commit real plt_ keys):
+#   export PLATFORM_APP_ID="${AUREY_PLATFORM_APP_ID:-YOUR_APP_UUID}"
+#   export PLATFORM_API_KEY="${AUREY_PLATFORM_API_KEY:-plt_YOUR_KEY}"
+#   export CONNECTION_ID="${CONNECTION_ID:-YOUR_CONNECTION_UUID}"
+#   export TEMPLATE_ID="${AUREY_PLATFORM_TEMPLATE_ID:-YOUR_TEMPLATE_ID}"
+
+# --- Minimal template (sketch) ---
+
+curl -X POST "https://api.1claw.xyz/v1/platform/apps/${PLATFORM_APP_ID}/templates" \
+  -H "Authorization: Bearer ${PLATFORM_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "default-template",
+    "spec": {
+      "vault": { "name": "main" },
+      "agents": [{ "name": "primary", "shroud_enabled": true }],
+      "policies": [{
+        "principal_ref": "agents.primary",
+        "vault_ref": "vault",
+        "paths": ["api-keys/*"],
+        "permissions": ["read", "write"]
+      }]
+    }
+  }'
+
+# --- Hosted Aurey default template (intents + signing_keys) ---
+
+curl -fsS -X POST "https://api.1claw.xyz/v1/platform/apps/${PLATFORM_APP_ID}/templates" \
+  -H "Authorization: Bearer ${PLATFORM_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "hosted-aurey-default",
+    "spec": {
+      "vault": {
+        "name": "user-vault",
+        "description": "Auto-provisioned vault"
+      },
+      "agents": [{
+        "name": "primary",
+        "description": "User agent",
+        "intents": { "enabled": true },
+        "shroud_enabled": true,
+        "shroud_config": {
+          "pii_policy": "redact",
+          "enable_secret_redaction": true
+        }
+      }],
+      "policies": [{
+        "principal_ref": "agents.primary",
+        "vault_ref": "vault",
+        "paths": ["api-keys/*", "keys/*"],
+        "permissions": ["read", "write"],
+        "conditions": {}
+      }],
+      "signing_keys": [{ "chain": "ethereum" }, { "chain": "solana" }]
+    }
+  }'
+
+# --- Bootstrap template variants (adjust name/spec per Platform docs) ---
+
+curl -fsS -X POST "https://api.1claw.xyz/v1/platform/apps/${PLATFORM_APP_ID}/templates" \
+  -H "Authorization: Bearer ${PLATFORM_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+  "name": "aurey-bootstrap-intents",
+  "spec": {
+    "vault": {
+      "name": "main",
+      "description": "Bootstrap vault"
+    },
+    "agents": [
+      {
+        "name": "aurey-agent",
+        "intents": { "enabled": true },
+        "signing_keys": [{ "chain": "ethereum" }]
+      }
+    ],
+    "policies": [
+      {
+        "principal_ref": "agent:0",
+        "paths": ["agents/*/chains/*"],
+        "permissions": ["read"]
+      }
+    ],
+    "signing_keys": [{ "chain": "ethereum" }, { "chain": "solana" }]
+  }
+}'
+
+# --- Provision / bootstrap user connection ---
+
+curl -X POST "https://api.1claw.xyz/v1/platform/users/upsert" \
+  -H "Authorization: Bearer ${PLATFORM_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "user@example.com", "display_name": "Alice" }'
+
+curl -X POST "https://api.1claw.xyz/v1/platform/connections/${CONNECTION_ID}/bootstrap" \
+  -H "Authorization: Bearer ${PLATFORM_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{ \"template_id\": \"${TEMPLATE_ID}\" }"
+
+# --- List app users (claim / onboarding debugging) ---
+
+curl -sS "https://api.1claw.xyz/v1/platform/apps/${PLATFORM_APP_ID}/users" \
+  -H "Authorization: Bearer ${PLATFORM_API_KEY}" \
+  -H "Accept: application/json"
+
+# --- Local hosted DB (dev) ---
+
+# PGPASSWORD=aurey_dev psql -h 127.0.0.1 -p 5433 -U aurey -d aurey
+#
+# SELECT * FROM hosted_platform_users WHERE telegram_user_id = YOUR_TELEGRAM_ID;

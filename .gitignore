@@ -26,6 +26,7 @@ ENV/
 # Environment files (keep .env.example tracked)
 .env
 .env.local
+.env.prod.beta
 .env.*.local
 
 # Test / tooling
@@ -47,4 +48,6 @@ coverage.xml
 eval/composer-li-fi/runs/**
 !eval/composer-li-fi/runs/.gitignore
 agentic_pantheon_business_strategy.md
+# Local 1Claw scratch curls with real plt_ keys (use docs/1claw-curls.example.txt)
 1claw-curls.txt
+1claw-curls-beta.txt

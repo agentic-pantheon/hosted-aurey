@@ -40,6 +40,7 @@ Set `AUREY_ONECLAW_DELEGATED_TOKEN_SCOPE` to the scope string your Platform app 
 
 - Platform API and console: [https://docs.1claw.xyz](https://docs.1claw.xyz)
 - Aurey env reference: repository root `.env.example`
+- Example Platform `curl` commands (placeholders only): [`1claw-curls.example.txt`](1claw-curls.example.txt). Copy to gitignored `1claw-curls.txt` at the repo root for a local scratch pad with real keys.
 
 ## 6. Operator API keys via environment
 

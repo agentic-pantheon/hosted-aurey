@@ -45,7 +45,7 @@ def ensure_aurey_wallet_harness(model_spec: str) -> None:
 
     cfg = HarnessProfileConfig(
         general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
-        excluded_middleware=frozenset({"TodoListMiddleware", "SummarizationMiddleware"}),
+        excluded_middleware=frozenset({"TodoListMiddleware"}),
         base_system_prompt=AUREY_DEEP_HARNESS_BASE,
     )
     register_harness_profile(model_spec, cfg)

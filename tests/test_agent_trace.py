@@ -27,6 +27,8 @@ from aurey.service.agent_trace import (
         ("INFO", "info"),
         ("debug", "debug"),
         ("verbose", "debug"),
+        ("minimal", "minimal"),
+        ("lite", "minimal"),
     ],
 )
 def test_agent_trace_detail_env(monkeypatch, env_val: str, expected: str | None) -> None:
@@ -88,6 +90,22 @@ def test_chain_start_tolerates_none_serialized_info_mode(caplog) -> None:
     )
     assert "graph_node=model" in caplog.text
     assert "event=chain_start" in caplog.text
+
+
+def test_tool_start_minimal_omits_input_payload(caplog) -> None:
+    h = AureyAgentTraceHandler(session_id="s", detail="minimal")
+    caplog.set_level(logging.INFO, logger="aurey.agent.trace")
+    rid = uuid4()
+    h.on_tool_start(
+        {"name": "swap_prepare"},
+        '{"secret":"should-not-appear-in-minimal"}' * 50,
+        run_id=rid,
+        metadata={"langgraph_node": "tools", "langgraph_step": 3},
+    )
+    assert "event=tool_start" in caplog.text
+    assert "tool=swap_prepare" in caplog.text
+    assert "input_chars=" in caplog.text
+    assert "should-not-appear" not in caplog.text
 
 
 def test_chain_start_skips_middleware_in_info_mode(caplog) -> None:
