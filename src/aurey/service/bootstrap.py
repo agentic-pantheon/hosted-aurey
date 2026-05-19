@@ -46,6 +46,7 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
         base_url=s.oneclaw_base_url.strip(),
         api_key=api_key,
         agent_token_expiry_skew_seconds=s.oneclaw_agent_token_expiry_skew_seconds,
+        hosted_settings_for_ocv=s if s.hosted_platform_enabled else None,
     )
     store = OneClawSecretStore(client=client, vault_id=vault_id, agent_id=s.oneclaw_agent_id)
 

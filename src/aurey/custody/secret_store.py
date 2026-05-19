@@ -209,7 +209,7 @@ class OneClawTypedDataSignResult:
 
 @dataclass(frozen=True)
 class OneClawIntentsSignOnlyResult:
-    """Parsed response from ``POST /v1/agents/{agent_id}/transactions/sign`` (BYORPC, no broadcast)."""
+    """Parsed response from ``POST .../transactions/sign`` (BYORPC, no broadcast)."""
 
     signed_tx: str
     tx_hash: str | None = None
@@ -341,6 +341,7 @@ class OneClawHttpClient:
         base_url: str,
         api_key: str,
         agent_token_expiry_skew_seconds: float = 60.0,
+        hosted_settings_for_ocv: Any | None = None,
     ) -> None:
         if not base_url.strip():
             raise ValueError("1Claw base URL must not be empty.")
@@ -350,6 +351,7 @@ class OneClawHttpClient:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._agent_token_expiry_skew_seconds = max(0.0, float(agent_token_expiry_skew_seconds))
+        self._hosted_settings_for_ocv = hosted_settings_for_ocv
         self._access_token: str | None = None
         self._access_token_agent: str | None = None
         self._access_token_api_key_fp: str | None = None
@@ -377,6 +379,95 @@ class OneClawHttpClient:
         )
         return self._get_secret_legacy_resolve(vault_id=vault_id, path=path)
 
+    def get_secret_operator_bootstrap_resolve(self, *, vault_id: str, path: str) -> str:
+        """Resolve a vault secret using bootstrap bearer (``POST .../secrets:resolve``).
+
+        Used for hosted ``ocv_`` reads without per-user agent JWT (avoids chicken-and-egg).
+        """
+
+        vid = vault_id.strip()
+        _log.info(
+            "1Claw operator bootstrap secrets:resolve vault_id=%s path=%s",
+            vid,
+            path.strip(),
+        )
+        return self._get_secret_legacy_resolve(vault_id=vid, path=path)
+
+    def put_secret_human_api(
+        self,
+        *,
+        vault_id: str,
+        path: str,
+        value: str,
+        bearer_token: str,
+    ) -> None:
+        """Create/update a vault secret via Human API (Bearer JWT).
+
+        ``PUT /v1/vaults/:vault_id/secrets/:path`` — see 1Claw Human API docs.
+        """
+
+        vid = vault_id.strip()
+        bt = bearer_token.strip()
+        if not vid:
+            raise ValueError("vault_id must be non-empty.")
+        if not bt:
+            raise ValueError("bearer_token must be non-empty.")
+        suffix = self._secret_url_path_suffix(path)
+        url = f"{self._base_url}/v1/vaults/{quote(vid, safe='')}/secrets/{suffix}"
+        _log.info(
+            "1Claw PUT secret (Human API; bearer redacted) url=%s vault_id=%s logical_path=%s",
+            url,
+            vid,
+            path.strip(),
+        )
+        payload = json.dumps({"type": "api_key", "value": value}).encode("utf-8")
+        request = Request(
+            url,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {bt}",
+                "Content-Type": "application/json",
+            },
+            method="PUT",
+        )
+        try:
+            with urlopen(request, timeout=15) as response:
+                code = response.getcode()
+                if code not in (200, 201):
+                    raise SecretStoreUnavailableError(
+                        path.strip(),
+                        store_name="1Claw",
+                        detail=f"Human API PUT secret returned HTTP {code}.",
+                    )
+        except HTTPError as exc:
+            _log.warning(
+                "1Claw PUT secret HTTP %s vault_id=%s logical_path=%s url=%s "
+                "response_body_preview=%s",
+                exc.code,
+                vid,
+                path.strip(),
+                url,
+                _http_error_snippet(exc, max_len=240),
+            )
+            raise SecretStoreUnavailableError(
+                path.strip(),
+                store_name="1Claw",
+                detail=f"Human API PUT secret failed with HTTP {exc.code}.",
+            ) from exc
+        except (OSError, URLError, json.JSONDecodeError) as exc:
+            _log.warning(
+                "1Claw PUT secret failed vault_id=%s logical_path=%s url=%s err=%s",
+                vid,
+                path.strip(),
+                url,
+                type(exc).__name__,
+            )
+            raise SecretStoreUnavailableError(
+                path.strip(),
+                store_name="1Claw",
+                detail=f"Human API PUT secret failed ({type(exc).__name__}).",
+            ) from exc
+
     def _invalidate_access_token(self, agent_id: str) -> None:
         if self._access_token_agent == agent_id:
             self._access_token = None
@@ -399,8 +490,24 @@ class OneClawHttpClient:
             return default
         if (hctx.user_agent_id or "").strip() != ag:
             return default
-        ocv = (hctx.agent_api_key or "").strip()
-        return ocv if ocv else default
+
+        hosted_settings = self._hosted_settings_for_ocv
+        if hosted_settings is not None:
+            from aurey.cloud.hosted_credentials import resolve_hosted_ocv_for_signing
+
+            ocv = resolve_hosted_ocv_for_signing(
+                hosted_settings,
+                self,
+                agent_id=ag,
+                ciphertext=hctx.agent_api_key_encrypted,
+                legacy_plaintext=hctx.agent_api_key_legacy_plaintext,
+            )
+            if ocv:
+                return ocv.strip()
+            return default
+
+        legacy = (hctx.agent_api_key_legacy_plaintext or "").strip()
+        return legacy if legacy else default
 
     def _fetch_access_token(self, agent_id: str, *, api_key: str) -> str:
         url = f"{self._base_url}/v1/auth/agent-token"
@@ -433,7 +540,8 @@ class OneClawHttpClient:
                 detail=(
                     f"Agent token exchange failed with HTTP {exc.code}. "
                     "This happens before any vault secret (e.g. Telegram path) is read. "
-                    "Check `oneclaw_agent_id`, bootstrap / per-user agent API key, and 1Claw availability."
+                    "Check `oneclaw_agent_id`, bootstrap / per-user agent API key, "
+                    "and 1Claw availability."
                 ),
             ) from exc
         except (OSError, URLError, json.JSONDecodeError) as exc:
@@ -1031,6 +1139,7 @@ class FakeOneClawClient:
         self.typed_data_calls: list[dict[str, Any]] = []
         self.intents_sign_calls: list[dict[str, Any]] = []
         self.delegated_calls: list[dict[str, str]] = []
+        self.put_human_calls: list[dict[str, Any]] = []
 
     def get_secret(self, *, vault_id: str, path: str, agent_id: str | None = None) -> str:
         self.requests.append({"vault_id": vault_id, "path": path, "agent_id": agent_id})
@@ -1038,6 +1147,27 @@ class FakeOneClawClient:
             return self._secrets[path]
         except KeyError as exc:
             raise SecretNotFoundError(path) from exc
+
+    def get_secret_operator_bootstrap_resolve(self, *, vault_id: str, path: str) -> str:
+        return self.get_secret(vault_id=vault_id, path=path, agent_id=None)
+
+    def put_secret_human_api(
+        self,
+        *,
+        vault_id: str,
+        path: str,
+        value: str,
+        bearer_token: str,
+    ) -> None:
+        self.put_human_calls.append(
+            {
+                "vault_id": vault_id.strip(),
+                "path": path.strip(),
+                "value": value,
+                "bearer_token": bearer_token.strip(),
+            }
+        )
+        self._secrets[path.strip()] = value
 
     def post_delegated_access_token(
         self,

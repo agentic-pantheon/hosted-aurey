@@ -405,13 +405,16 @@ def hosted_invoke_bundle_for_telegram_user(
             return None, extras
         dst_raw = row.delegation_subject_token
         dst_out = dst_raw.strip() if isinstance(dst_raw, str) and dst_raw.strip() else None
-        ak_raw = row.agent_api_key
-        ak_out = ak_raw.strip() if isinstance(ak_raw, str) and ak_raw.strip() else None
+        enc_raw = row.agent_api_key_encrypted
+        enc_out = enc_raw.strip() if isinstance(enc_raw, str) and enc_raw.strip() else None
+        leg_raw = row.agent_api_key
+        leg_out = leg_raw.strip() if isinstance(leg_raw, str) and leg_raw.strip() else None
         ctx = HostedSigningContext(
             telegram_user_id=tid,
             user_agent_id=(row.user_agent_id or "").strip(),
             delegation_subject_token=dst_out,
-            agent_api_key=ak_out,
+            agent_api_key_encrypted=enc_out,
+            agent_api_key_legacy_plaintext=leg_out,
             wallet_address=extras.get("hosted_wallet_address"),
         )
         return ctx, extras
@@ -528,6 +531,7 @@ def build_telegram_application(
                 HostedProvisioningError,
                 ensure_telegram_user_provisioned,
             )
+            from aurey.custody.secret_store import OneClawHttpClient
 
             tg_user = update.effective_user
             tid_raw = getattr(tg_user, "id", None)
@@ -544,12 +548,18 @@ def build_telegram_application(
                 platform = OneClawPlatformClient.from_settings(cfg)
                 db = factory()
                 try:
+                    vault_http = (
+                        state.runtime.oneclaw_evm_signer
+                        if isinstance(state.runtime.oneclaw_evm_signer, OneClawHttpClient)
+                        else None
+                    )
                     row, _ = ensure_telegram_user_provisioned(
                         db,
                         cfg,
                         platform,
                         telegram_user_id=telegram_user_id,
                         username=telegram_username,
+                        vault_http_client=vault_http,
                     )
                     try:
                         refresh_hosted_user_claim_state(db, cfg, platform, row)

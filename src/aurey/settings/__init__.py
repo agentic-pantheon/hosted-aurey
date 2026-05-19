@@ -167,6 +167,35 @@ class AureySettings(BaseSettings):
         ),
     )
 
+    hosted_agent_api_key_vault_id: str = Field(
+        default="",
+        description=(
+            "Vault UUID for dual-writing hosted users' ``ocv_`` secrets via Human API PUT; "
+            "when empty, ``oneclaw_vault_id`` is used."
+        ),
+    )
+    hosted_agent_api_key_path_prefix: str = Field(
+        default="hosted/agents",
+        description=(
+            "Prefix segment before ``/{user_agent_id}/agent_api_key`` for vault paths "
+            "(alphanumeric, hyphens, underscores, slashes only)."
+        ),
+    )
+    hosted_secrets_master_key: str | None = Field(
+        default=None,
+        description=(
+            "Fernet URL-safe base64 key for ``hosted_platform_users.agent_api_key_encrypted``. "
+            "Generate with Fernet.generate_key().decode()."
+        ),
+    )
+    oneclaw_human_api_token: str | None = Field(
+        default=None,
+        description=(
+            "Human API Bearer JWT for vault PUT when persisting hosted ``ocv_`` at bootstrap. "
+            "Unset skips vault PUT (Postgres ciphertext/plaintext only)."
+        ),
+    )
+
     hosted_oidc_issuer_url: str | None = Field(
         default=None,
         description="Phase B: OIDC issuer URL for hosted user flows (optional).",
@@ -310,6 +339,27 @@ class AureySettings(BaseSettings):
             return None
         parse_telegram_allowed_chat_ids(stripped)
         return stripped
+
+    @field_validator("hosted_agent_api_key_vault_id", mode="before")
+    @classmethod
+    def _hosted_agent_api_key_vault_id_strip(cls, v: object) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+    @field_validator("hosted_agent_api_key_path_prefix")
+    @classmethod
+    def _hosted_agent_api_key_path_prefix_normalized(cls, v: str) -> str:
+        s = (v or "").strip().strip("/")
+        return s if s else "hosted/agents"
+
+    @field_validator("oneclaw_human_api_token", "hosted_secrets_master_key", mode="before")
+    @classmethod
+    def _strip_optional_hosted_crypto(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
 
     @property
     def telegram_allowed_chat_id_allowlist(self) -> frozenset[int] | None:

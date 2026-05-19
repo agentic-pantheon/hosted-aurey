@@ -474,7 +474,7 @@ def test_oneclaw_http_agent_token_uses_hosted_ocv_in_signing_context():
         ctx = HostedSigningContext(
             telegram_user_id=1,
             user_agent_id="user-agent-uuid",
-            agent_api_key="ocv_from_bootstrap_body",
+            agent_api_key_legacy_plaintext="ocv_from_bootstrap_body",
         )
         with hosted_signing_context_scope(ctx):
             client.sign_personal_message(
@@ -507,7 +507,7 @@ def test_oneclaw_http_agent_token_ignores_ocv_when_hosted_agent_id_mismatches():
         ctx = HostedSigningContext(
             telegram_user_id=1,
             user_agent_id="different-agent",
-            agent_api_key="ocv_should_not_apply",
+            agent_api_key_legacy_plaintext="ocv_should_not_apply",
         )
         with hosted_signing_context_scope(ctx):
             client.sign_personal_message(agent_id="signing-agent-id", chain="eth", message="x")

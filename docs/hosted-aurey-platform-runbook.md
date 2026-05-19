@@ -53,7 +53,16 @@ See [.env.example](../.env.example) and [`api_key_resolution`](../src/aurey/grap
 
 ## 7. Hosted intents auth (bootstrap + per-user agent)
 
-**Current behavior:** For each Telegram user, once provisioning has a **`user_agent_id`**, Aurey obtains a JWT via **`POST /v1/auth/agent-token`**. The `api_key` in that request is the per-user **`ocv_`** value from **`summary.agent_api_key`** in the Platform bootstrap JSON when Aurey has persisted it in **`hosted_platform_users.agent_api_key`**; until that field is populated, **`AUREY_ONECLAW_BOOTSTRAP_API_KEY`** is used as the fallback. The returned Bearer is then sent on intents (`/sign`, `transactions/sign`, etc.). **`plt_`** keys are only for Platform routes (upsert, bootstrap), not for `agent-token`. Existing users provisioned before this column existed may need another bootstrap (or a manual DB update with the one-time `ocv_` from 1Claw) before `agent_api_key` is filled.
+For each Telegram user, once provisioning has a **`user_agent_id`**, Aurey obtains a JWT via **`POST /v1/auth/agent-token`**. The `api_key` in that request is resolved in order:
+
+1. **Operator vault** — `POST .../secrets:resolve` with **`AUREY_ONECLAW_BOOTSTRAP_API_KEY`** as Bearer reads **`{AUREY_HOSTED_AGENT_API_KEY_PATH_PREFIX}/{user_agent_id}/agent_api_key`** (default prefix `hosted/agents`) under **`AUREY_ONECLAW_VAULT_ID`** or **`AUREY_HOSTED_AGENT_API_KEY_VAULT_ID`** when set.
+2. **Encrypted Postgres backup** — Fernet ciphertext in **`hosted_platform_users.agent_api_key_encrypted`** when **`AUREY_HOSTED_SECRETS_MASTER_KEY`** is configured (generate key via `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
+3. **Legacy plaintext column** — **`hosted_platform_users.agent_api_key`** until rows are migrated off plaintext.
+4. **Fallback** — **`AUREY_ONECLAW_BOOTSTRAP_API_KEY`** when none of the above yield an `ocv_`.
+
+On bootstrap, when **`summary.agent_api_key`** is present, Aurey **dual-writes**: **`PUT /v1/vaults/{vault_id}/secrets/{path}`** using the [**Human API**](https://docs.1claw.xyz/docs/human-api/secrets/create) Bearer **`AUREY_ONECLAW_HUMAN_API_TOKEN`** (when set), plus encrypts into **`agent_api_key_encrypted`** when the Fernet master key is set. If neither vault PUT nor encryption is configured, the key stays in **`agent_api_key`** plaintext as before.
+
+**`plt_`** keys are only for Platform routes (upsert, bootstrap), not for `agent-token`.
 
 **Legacy / optional:** The `hosted_platform_users.delegation_subject_token` column and Telegram **`/grant`** / **`/delegation_grant`** (when **`AUREY_HOSTED_ADMIN_TELEGRAM_USER_IDS`** is set) may still persist earlier **staging** subject tokens; they are **not** required for `oneclaw_intents` prepare/execute/tools when using the operator bootstrap key with template agents.
 

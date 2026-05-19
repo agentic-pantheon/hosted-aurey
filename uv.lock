@@ -191,6 +191,7 @@ name = "aurey"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "deepagents" },
     { name = "langchain" },
     { name = "langchain-openai" },
@@ -225,6 +226,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=42" },
     { name = "deepagents", specifier = ">=0.5.8" },
     { name = "fastapi", marker = "extra == 'api'" },
     { name = "langchain" },

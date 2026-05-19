@@ -6,9 +6,11 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from aurey.cloud.hosted_credentials import HostedSecretsCipher, agent_api_key_secret_path
 from aurey.cloud.models import Base, HostedPlatformUserORM
 from aurey.cloud.platform_client import PlatformBootstrapResult, PlatformUpsertResult
 from aurey.cloud.provision import HostedProvisioningError, ensure_telegram_user_provisioned
+from aurey.custody.secret_store import FakeOneClawClient
 from aurey.graphs.evm_codec import to_checksum_evm_address
 from aurey.settings import AureySettings
 
@@ -202,6 +204,50 @@ def test_partial_row_bootstraps_only() -> None:
         assert "existing-conn" in row.claim_url
         assert fake.upserts == 0
         assert fake.bootstraps == 1
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_provision_dual_writes_ocv_when_vault_client_configured() -> None:
+    from cryptography.fernet import Fernet
+
+    raw_key = Fernet.generate_key().decode("ascii")
+    settings = AureySettings(
+        hosted_platform_enabled=True,
+        platform_api_key="plt_fake",
+        platform_template_id="tmpl_1",
+        oneclaw_vault_id="vault-op",
+        hosted_secrets_master_key=raw_key,
+        oneclaw_human_api_token="human-test-bearer",
+    )
+    session, engine = _memory_session()
+    try:
+        fake = _FakePlatform()
+        vault_fake = FakeOneClawClient()
+        row, refreshed = ensure_telegram_user_provisioned(
+            session,
+            settings,
+            fake,
+            telegram_user_id=424242,
+            username="tester",
+            vault_http_client=vault_fake,
+        )
+        session.commit()
+        assert refreshed is True
+        assert row.agent_api_key is None
+        cipher = HostedSecretsCipher.from_settings_optional(settings)
+        assert cipher is not None
+        assert cipher.decrypt(row.agent_api_key_encrypted or "") == "ocv_fake_provision_key"
+        path = agent_api_key_secret_path("hosted/agents", "agent-x")
+        assert vault_fake.put_human_calls == [
+            {
+                "vault_id": "vault-op",
+                "path": path,
+                "value": "ocv_fake_provision_key",
+                "bearer_token": "human-test-bearer",
+            },
+        ]
     finally:
         session.close()
         engine.dispose()

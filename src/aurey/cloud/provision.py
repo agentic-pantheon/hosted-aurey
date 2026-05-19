@@ -5,8 +5,9 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from aurey.cloud.hosted_credentials import HostedVaultHttpPort, persist_hosted_agent_ocv_credentials
 from aurey.cloud.models import HostedPlatformUserORM
-from aurey.cloud.platform_client import OneClawPlatformClient
+from aurey.cloud.platform_client import OneClawPlatformClient, PlatformBootstrapResult
 from aurey.cloud.wallet_sync import maybe_backfill_wallet_from_signing_keys
 from aurey.settings import AureySettings
 
@@ -28,6 +29,33 @@ def synthetic_email_for_telegram_user(
     return f"tg_{telegram_user_id}@{domain}"
 
 
+def _persist_hosted_ocv_after_bootstrap(
+    *,
+    settings: AureySettings,
+    vault_http_client: HostedVaultHttpPort | None,
+    row: HostedPlatformUserORM,
+    boot: PlatformBootstrapResult,
+) -> None:
+    raw = boot.agent_api_key
+    if raw is None or not str(raw).strip():
+        return
+    ocv = str(raw).strip()
+    ua = (row.user_agent_id or "").strip()
+    if not ua:
+        row.agent_api_key = ocv
+        return
+    if vault_http_client is not None:
+        persist_hosted_agent_ocv_credentials(
+            settings=settings,
+            http_client=vault_http_client,
+            row=row,
+            ocv=ocv,
+            user_agent_id=ua,
+        )
+    else:
+        row.agent_api_key = ocv
+
+
 def ensure_telegram_user_provisioned(
     session: Session,
     settings: AureySettings,
@@ -35,6 +63,7 @@ def ensure_telegram_user_provisioned(
     *,
     telegram_user_id: int,
     username: str | None,
+    vault_http_client: HostedVaultHttpPort | None = None,
 ) -> tuple[HostedPlatformUserORM, bool]:
     """Upsert hosted metadata and call the Platform API when the row is incomplete.
 
@@ -106,7 +135,6 @@ def ensure_telegram_user_provisioned(
             onboarding_state="awaiting_claim",
             vault_id=boot.vault_id,
             user_agent_id=boot.user_agent_id,
-            agent_api_key=(boot.agent_api_key or "").strip() or None,
         )
         _merge_wallet(boot.wallet_address)
         session.add(row)
@@ -117,9 +145,14 @@ def ensure_telegram_user_provisioned(
         row.vault_id = boot.vault_id
         if boot.user_agent_id is not None:
             row.user_agent_id = boot.user_agent_id
-        if boot.agent_api_key is not None and str(boot.agent_api_key).strip():
-            row.agent_api_key = boot.agent_api_key.strip()
         _merge_wallet(boot.wallet_address)
+
+    _persist_hosted_ocv_after_bootstrap(
+        settings=settings,
+        vault_http_client=vault_http_client,
+        row=row,
+        boot=boot,
+    )
 
     # Bootstrap JSON may omit addresses while agent id exists; fetch once when plausible.
     if platform is not None:

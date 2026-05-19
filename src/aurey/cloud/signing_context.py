@@ -18,13 +18,16 @@ __all__ = [
 class HostedSigningContext:
     """Telegram-hosted user identity for 1Claw intents (agent-token flow).
 
-    ``agent_api_key`` is the per-user ``ocv_`` from bootstrap; ``delegation_subject_token`` is legacy.
+    ``agent_api_key_encrypted`` holds Fernet ciphertext from Postgres (backup).
+    ``agent_api_key_legacy_plaintext`` is deprecated plaintext DB fallback until migrated.
+    ``delegation_subject_token`` is legacy optional delegation material.
     """
 
     telegram_user_id: int
     user_agent_id: str
     delegation_subject_token: str | None = None
-    agent_api_key: str | None = None
+    agent_api_key_encrypted: str | None = None
+    agent_api_key_legacy_plaintext: str | None = None
     wallet_address: str | None = None
 
 
