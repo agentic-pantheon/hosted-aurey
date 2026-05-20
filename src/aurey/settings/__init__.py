@@ -16,6 +16,7 @@ from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 EvmSigningMode = Literal["vault_key", "oneclaw_intents"]
+LlmProxyMode = Literal["shroud", "direct"]
 
 _TELEGRAM_ALLOWLIST_SPLIT_RE = re.compile(r"[\s,]+")
 
@@ -272,6 +273,36 @@ class AureySettings(BaseSettings):
             "Unset or empty means no restriction."
         ),
     )
+    llm_proxy: LlmProxyMode = Field(
+        default="shroud",
+        description=(
+            "How Deep Agent reaches the LLM: ``shroud`` (1Claw Shroud with ``X-Shroud-*`` "
+            "headers) or ``direct`` (``OPENAI_API_KEY`` straight to OpenAI). "
+            "Reads env ``AUREY_LLM_PROXY`` (underscore field → ``LLM_PROXY``)."
+        ),
+    )
+    shroud_base_url: str = Field(
+        default="https://shroud.1claw.xyz",
+        description=(
+            "1Claw Shroud base URL for the LLM proxy (``/v1`` appended for chat completions). "
+            "Environment: ``AUREY_SHROUD_BASE_URL``."
+        ),
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        description=(
+            "Plaintext OpenAI API key via ``OPENAI_API_KEY``: required when ``llm_proxy`` is "
+            "``direct``; optional ``X-Shroud-Api-Key`` override when using Shroud."
+        ),
+        validation_alias=AliasChoices("OPENAI_API_KEY"),
+    )
+    openai_api_secret_path: str | None = Field(
+        default=None,
+        description=(
+            "Optional 1Claw vault path holding the OpenAI key; in Shroud mode sent as "
+            "``vault://{vault_id}/{path}`` when ``OPENAI_API_KEY`` is unset."
+        ),
+    )
     deep_agent_default_model: str = Field(
         default="openai:gpt-4o-mini",
         description="Default Deep Agents model spec when the HTTP API omits ``model``.",
@@ -292,6 +323,14 @@ class AureySettings(BaseSettings):
         ),
         validation_alias=AliasChoices("AUREY_DATABASE_URL", "DATABASE_URL"),
     )
+
+    @field_validator("openai_api_key", mode="before")
+    @classmethod
+    def _strip_openai_api_key(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
 
     @field_validator("alchemy_api_key", "lifi_api_key", "telegram_bot_token", mode="before")
     @classmethod

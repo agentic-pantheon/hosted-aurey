@@ -586,6 +586,11 @@ def test_wallet_context_for_deep_agent_prompt_invalid(caplog):
     )
 
 
+def test_runtime_wiring_context_llm_direct_mode_prompt_line() -> None:
+    out = deep_agent_mod.runtime_wiring_context_for_deep_agent_prompt(AureySettings(llm_proxy="direct"))
+    assert "direct OpenAI-compatible API" in out
+
+
 def test_runtime_wiring_context_for_deep_agent_prompt_no_identifiers_or_paths():
     s = AureySettings(
         oneclaw_base_url="https://api.example.test",
@@ -599,6 +604,7 @@ def test_runtime_wiring_context_for_deep_agent_prompt_no_identifiers_or_paths():
         telegram_bot_token_secret_path="telegram/path",
         lifi_integrator="test-int-do-not-show",
         database_url="postgresql://user:SUPER_SECRET@localhost:5432/db",
+        llm_proxy="shroud",
     )
     out = deep_agent_mod.runtime_wiring_context_for_deep_agent_prompt(s)
     assert out
@@ -614,6 +620,7 @@ def test_runtime_wiring_context_for_deep_agent_prompt_no_identifiers_or_paths():
     assert "postgresql://" not in out
     assert "agent-value-must-not-appear" not in out
     assert "vault-xyz-do-not-show" not in out
+    assert "1Claw Shroud proxy" in out
 
 
 def test_earn_list_vaults_tool_ok_with_trimmed_rows():

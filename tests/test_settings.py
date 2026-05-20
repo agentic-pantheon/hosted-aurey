@@ -7,6 +7,8 @@ from pydantic import ValidationError
 
 from aurey.settings import AureySettings, parse_telegram_allowed_chat_ids
 
+pytestmark = pytest.mark.preserve_llm_env
+
 
 def test_settings_defaults():
     s = AureySettings()
@@ -27,6 +29,10 @@ def test_settings_defaults():
     assert s.telegram_allowed_chat_ids is None
     assert s.telegram_allowed_chat_id_allowlist is None
     assert s.deep_agent_default_model == "openai:gpt-4o-mini"
+    assert s.llm_proxy == "shroud"
+    assert s.shroud_base_url == "https://shroud.1claw.xyz"
+    assert s.openai_api_key is None
+    assert s.openai_api_secret_path is None
     assert s.database_url is None
     assert s.oneclaw_agent_token_expiry_skew_seconds == 60.0
     assert s.oneclaw_delegated_token_scope == "1claw:intents:delegated"
@@ -174,6 +180,14 @@ def test_settings_plaintext_api_keys_trim_and_empty(monkeypatch) -> None:
     monkeypatch.setenv("AUREY_ALCHEMY_API_KEY", "   ")
     s2 = AureySettings()
     assert s2.alchemy_api_key is None
+
+
+def test_llm_proxy_reads_prefixed_env(monkeypatch) -> None:
+    monkeypatch.delenv("AUREY_LLM_PROXY", raising=False)
+    monkeypatch.setenv("AUREY_LLM_PROXY", "direct")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-set-for-direct")
+    s = AureySettings()
+    assert s.llm_proxy == "direct"
 
 
 def test_resolve_operator_agent_api_key(monkeypatch):
