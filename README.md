@@ -65,7 +65,7 @@ uv sync --group dev --extra telegram # optional Telegram bot deps
 cp .env.example .env
 ```
 
-Set at least `**AUREY_ONECLAW_VAULT_ID**`, `**AUREY_ONECLAW_BOOTSTRAP_API_KEY**` (the bootstrap key’s value goes in env; vault entries stay path-based), and your model provider (`**OPENAI_API_KEY**` when using defaults like `openai:gpt-4o-mini`). See `[.env.example](.env.example)` for vault paths (**Alchemy**, **LiFi**, **signing key**, **Telegram**, etc.). **Do not inline production secrets.**
+Set at least `**AUREY_ONECLAW_VAULT_ID**`, `**AUREY_ONECLAW_BOOTSTRAP_API_KEY**` (the bootstrap key’s value goes in env; vault entries stay path-based), and wire the planner model. **By default (`AUREY_LLM_PROXY=shroud`),** Aurey sends chat completions via [Shroud](https://docs.1claw.xyz/docs/guides/shroud): set `**AUREY_ONECLAW_AGENT_ID**` plus the operator/agent credential (delegated actor or bootstrap key). Optionally set **`OPENAI_API_KEY`** as an `X-Shroud-Api-Key` override or rely on Vault (`providers/openai/api-key`; see [.env.example](.env.example)). For local debugging without Shroud, set `**AUREY_LLM_PROXY=direct`** and **`OPENAI_API_KEY`**. See [.env.example](.env.example) for vault paths (**Alchemy**, **LiFi**, **signing key**, **Telegram**, etc.). **Do not inline production secrets.**
 
 ### 3 · Run the HTTP API locally
 

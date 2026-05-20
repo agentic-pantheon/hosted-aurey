@@ -23,6 +23,10 @@ Record the template id returned by the API or console and set:
 
 `AUREY_PLATFORM_TEMPLATE_ID=<id-from-bootstrap>`
 
+Agents used for Telegram / hosted Aurey turns should generally have **`shroud_enabled: true`** on the provisioning template ([Shroud docs](https://docs.1claw.xyz/docs/guides/shroud)): the Deep Agent’s LLM calls go through `https://shroud.1claw.xyz/v1/chat/completions` with `X-Shroud-Agent-Key` / `X-Shroud-Provider`, so policy, redaction, and optional Vault-backed OpenAI keys apply. Prefer storing the upstream OpenAI key in the **end-user vault** at `providers/openai/api-key`; omit `OPENAI_API_KEY` unless you deliberately send a plaintext override via header. Operators can alternatively set **`AUREY_OPENAI_API_SECRET_PATH`** when the bootstrap key must resolve a **`vault://{vault}/{path}`** reference for **`X-Shroud-Api-Key`**. Standalone deployments also need **`AUREY_ONECLAW_AGENT_ID`** and the operator/agent credential (see `.env.example`). When you edit **`shroud_config`** or Shroud dashboard policy, rotate or re-exchange agent credentials so JWTs carrying `shroud_config` stay fresh (see 1Claw Shroud JWT refresh docs).
+
+Use **`AUREY_LLM_PROXY=direct`** with **`OPENAI_API_KEY`** only for local bypass of Shroud.
+
 ## 3. Operator 1Claw API key (`AUREY_ONECLAW_BOOTSTRAP_API_KEY`)
 
 Hosted Aurey still boots a **`OneClawHttpClient`** for vault access (fallback when env keys are not set) and for signing helpers. Configure:
