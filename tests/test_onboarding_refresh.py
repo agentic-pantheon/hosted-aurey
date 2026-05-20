@@ -98,6 +98,41 @@ def test_refresh_marks_ready_and_persists_fields() -> None:
         engine.dispose()
 
 
+def test_refresh_updates_claim_url_from_connection_get() -> None:
+    settings = AureySettings(
+        hosted_platform_enabled=True,
+        platform_api_key="plt_test",
+        platform_template_id="tmpl_x",
+    )
+    fake = _FakeConnPlatform(
+        {
+            "conn-c": {
+                "claimed": False,
+                "claim_url": "https://claim.test/renewed",
+            },
+        },
+    )
+    session, engine = _memory_session()
+    try:
+        row = HostedPlatformUserORM(
+            telegram_user_id=1002,
+            telegram_username=None,
+            connection_id="conn-c",
+            claim_url="https://claim.test/expired",
+            onboarding_state="awaiting_claim",
+        )
+        session.add(row)
+        session.commit()
+
+        refresh_hosted_user_claim_state(session, settings, fake, 1002)
+        session.refresh(row)
+        assert row.claim_url == "https://claim.test/renewed"
+        assert row.onboarding_state == "awaiting_claim"
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_refresh_marks_ready_via_app_users_list() -> None:
     app = "ed17c6ee-baff-4fa7-8018-267c22ea95a7"
     settings = AureySettings(

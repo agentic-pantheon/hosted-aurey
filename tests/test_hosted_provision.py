@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 from aurey.cloud.hosted_credentials import HostedSecretsCipher, agent_api_key_secret_path
 from aurey.cloud.models import Base, HostedPlatformUserORM
-from aurey.cloud.platform_client import PlatformBootstrapResult, PlatformUpsertResult
+from aurey.cloud.platform_client import HostedPlatformApiError, PlatformBootstrapResult, PlatformUpsertResult
 from aurey.cloud.provision import HostedProvisioningError, ensure_telegram_user_provisioned
 from aurey.custody.secret_store import FakeOneClawClient
 from aurey.graphs.evm_codec import to_checksum_evm_address
@@ -45,6 +45,14 @@ class _FakePlatform:
                 "0xdddddddddddddddddddddddddddddddddddddddd",
             ),
         )
+
+    def get_connection(self, connection_id: str) -> dict:
+        _ = connection_id
+        return {"claimed": False}
+
+    def list_app_users(self, app_id: str):
+        _ = app_id
+        return {}
 
     def get_agent_signing_keys(self, agent_id: str) -> dict:
         self.signing_keys_calls.append(agent_id)
@@ -98,6 +106,136 @@ def test_ensure_telegram_user_provisioned_rebootstraps_while_awaiting_claim() ->
         assert row2.id == row.id
         assert fake.upserts == 1
         assert fake.bootstraps == 2
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_awaiting_claim_polls_ready_before_bootstrap() -> None:
+    settings = AureySettings(
+        hosted_platform_enabled=True,
+        platform_api_key="plt_fake",
+        platform_template_id="tmpl_1",
+    )
+    session, engine = _memory_session()
+    try:
+        row = HostedPlatformUserORM(
+            telegram_user_id=555,
+            telegram_username="u",
+            connection_id="conn-claimed",
+            claim_url="https://claim.test/old",
+            onboarding_state="awaiting_claim",
+            user_agent_id="agent-old",
+        )
+        session.add(row)
+        session.commit()
+
+        class _ClaimedPlatform:
+            bootstraps = 0
+
+            def upsert_user_synthetic_email(self, *, email: str, display_name: str | None):
+                _ = email, display_name
+                return PlatformUpsertResult(connection_id="conn-claimed")
+
+            def bootstrap(self, connection_id: str, template_id: str) -> PlatformBootstrapResult:
+                _ = connection_id, template_id
+                _ClaimedPlatform.bootstraps += 1
+                raise AssertionError("bootstrap should not run when poll marks ready")
+
+            def list_app_users(self, app_id: str):
+                _ = app_id
+                return {}
+
+            def get_connection(self, connection_id: str):
+                return {"claimed": True, "agent_id": "agent-live", "vault_id": "vault-live"}
+
+            def get_agent_signing_keys(self, agent_id: str):
+                _ = agent_id
+                return {"keys": []}
+
+        fake = _ClaimedPlatform()
+        out, refreshed = ensure_telegram_user_provisioned(
+            session,
+            settings,
+            fake,
+            telegram_user_id=555,
+            username="u",
+        )
+        session.commit()
+        assert refreshed is True
+        assert out.onboarding_state == "ready"
+        assert out.user_agent_id == "agent-live"
+        assert _ClaimedPlatform.bootstraps == 0
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_bootstrap_500_recovers_via_new_connection_from_upsert() -> None:
+    settings = AureySettings(
+        hosted_platform_enabled=True,
+        platform_api_key="plt_fake",
+        platform_template_id="tmpl_1",
+    )
+    session, engine = _memory_session()
+    try:
+        row = HostedPlatformUserORM(
+            telegram_user_id=556,
+            telegram_username=None,
+            connection_id="conn-stale",
+            claim_url="https://claim.test/expired",
+            onboarding_state="awaiting_claim",
+        )
+        session.add(row)
+        session.commit()
+
+        class _RetryPlatform:
+            def __init__(self) -> None:
+                self.bootstraps = 0
+                self.upserts = 0
+
+            def upsert_user_synthetic_email(self, *, email: str, display_name: str | None):
+                _ = email, display_name
+                self.upserts += 1
+                return PlatformUpsertResult(connection_id="conn-fresh")
+
+            def bootstrap(self, connection_id: str, template_id: str) -> PlatformBootstrapResult:
+                _ = template_id
+                self.bootstraps += 1
+                if connection_id == "conn-stale":
+                    raise HostedPlatformApiError("Platform HTTP 500", status_code=500)
+                return PlatformBootstrapResult(
+                    claim_url=f"https://claim.test/new/{connection_id}",
+                    vault_id="vault-new",
+                    user_agent_id="agent-new",
+                )
+
+            def list_app_users(self, app_id: str):
+                _ = app_id
+                return {}
+
+            def get_connection(self, connection_id: str):
+                _ = connection_id
+                return {"claimed": False}
+
+            def get_agent_signing_keys(self, agent_id: str):
+                _ = agent_id
+                return {"keys": []}
+
+        fake = _RetryPlatform()
+        out, refreshed = ensure_telegram_user_provisioned(
+            session,
+            settings,
+            fake,
+            telegram_user_id=556,
+            username="u",
+        )
+        session.commit()
+        assert refreshed is True
+        assert out.connection_id == "conn-fresh"
+        assert "conn-fresh" in out.claim_url
+        assert fake.bootstraps == 2
+        assert fake.upserts == 1
     finally:
         session.close()
         engine.dispose()

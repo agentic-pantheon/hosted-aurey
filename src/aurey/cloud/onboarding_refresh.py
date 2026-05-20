@@ -16,7 +16,7 @@ from aurey.cloud.claim_status import (
     user_record_for_connection_id,
 )
 from aurey.cloud.models import HostedPlatformUserORM
-from aurey.cloud.platform_client import HostedPlatformApiError
+from aurey.cloud.platform_client import HostedPlatformApiError, extract_claim_url
 from aurey.cloud.wallet_sync import maybe_backfill_wallet_from_signing_keys
 from aurey.settings import AureySettings
 
@@ -156,6 +156,10 @@ def refresh_hosted_user_claim_state(
                 )
                 return row
             raise
+
+    fresh_claim = extract_claim_url(payload)
+    if fresh_claim:
+        row.claim_url = fresh_claim
 
     signals = connection_claim_details(payload)
     _merge_signals_into_row(row, signals)
