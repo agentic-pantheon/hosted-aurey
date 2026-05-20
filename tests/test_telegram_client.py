@@ -90,7 +90,7 @@ class _FakeServiceState:
         self.settings = AureySettings()
         self.hosted_session_factory = None
 
-    def get_or_create_graph(self, model: str | None):
+    def get_or_create_graph(self, model: str | None, **_: object):
         self.model = model
         return self.graph
 

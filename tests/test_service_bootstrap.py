@@ -149,6 +149,34 @@ def test_bootstrap_postgres_failure_wrapped(monkeypatch):
         bootstrap_aurey_service_state(s)
 
 
+@pytest.mark.preserve_llm_env
+def test_bootstrap_shroud_standalone_requires_oneclaw_agent_id(monkeypatch):
+    monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "k")
+    s = AureySettings(oneclaw_vault_id="v-single")
+    with pytest.raises(AureyServiceBootstrapError, match=r"AUREY_ONECLAW_AGENT_ID"):
+        bootstrap_aurey_service_state(s)
+
+
+@pytest.mark.preserve_llm_env
+def test_bootstrap_shroud_standalone_initializes(monkeypatch):
+    monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "k")
+    s = AureySettings(
+        oneclaw_vault_id="v-ag",
+        oneclaw_agent_id="550e8400-e29b-41d4-a716-446655440000",
+    )
+    state = bootstrap_aurey_service_state(s)
+    assert state.runtime.secret_store is not None
+
+
+@pytest.mark.preserve_llm_env
+def test_bootstrap_direct_requires_openai(monkeypatch):
+    monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "k")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    s = AureySettings(oneclaw_vault_id="v-openai-miss", llm_proxy="direct")
+    with pytest.raises(AureyServiceBootstrapError, match="OPENAI_API_KEY"):
+        bootstrap_aurey_service_state(s)
+
+
 def test_construct_service_state_get_graph_invoke_smoke(monkeypatch):
     """Fake runtime + patched deep agent avoids live model providers."""
 

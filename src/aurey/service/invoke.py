@@ -16,6 +16,7 @@ from aurey.cloud.signing_context import (
 )
 from aurey.graphs.evm_codec import to_checksum_evm_address
 from aurey.reasoning import thread_config
+from aurey.reasoning.shroud_llm import hosted_shroud_llm_credentials_ready
 from aurey.service.agent_trace import build_agent_trace_handler, format_exception_chain
 from aurey.service.message_content import (
     flatten_message_content,
@@ -231,8 +232,36 @@ def invoke_deep_agent_turn(
     if merged:
         config = {**config, "callbacks": merged}
 
+    settings = svc.settings
+    hosted_for_graph = (
+        hosted_signing_context
+        if (settings.llm_proxy or "").strip().lower() == "shroud"
+        else None
+    )
+    if hosted_for_graph is not None:
+        if not hosted_shroud_llm_credentials_ready(svc.runtime, hosted_for_graph):
+            err_msg = (
+                "Hosted LLM (Shroud) requires a provisioned agent API key for this user."
+            )
+            _log.info(
+                "error  %s",
+                _kv_line(
+                    session=session_id,
+                    code="llm_credentials_unavailable",
+                    detail=_log_clip(err_msg),
+                ),
+            )
+            return AgentInvokeResult(
+                ok=False,
+                session_id=session_id,
+                error=AgentInvokeError(
+                    code="llm_credentials_unavailable",
+                    message=err_msg,
+                ),
+            )
+
     try:
-        graph = svc.get_or_create_graph(model)
+        graph = svc.get_or_create_graph(model, hosted_signing_context=hosted_for_graph)
     except RuntimeError as exc:
         code = "deep_agent_unavailable"
         if "deepagents" in str(exc).lower():
