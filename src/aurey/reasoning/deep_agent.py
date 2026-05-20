@@ -9,10 +9,12 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
+from aurey.cloud.signing_context import HostedSigningContext
 from aurey.graphs.chains import CHAIN_INDEX
 from aurey.graphs.evm_codec import normalize_evm_address
 from aurey.reasoning.harness import ensure_aurey_wallet_harness, resolve_harness_model_spec
 from aurey.reasoning.langsmith_trace import apply_langsmith_tool_output_patch
+from aurey.reasoning.shroud_llm import resolve_llm_chat_model_for_graph
 from aurey.runtime import AureyRuntime
 from aurey.settings import AureySettings
 from aurey.tools.agent_tools import build_aurey_subgraph_tools
@@ -144,7 +146,7 @@ def runtime_wiring_context_for_deep_agent_prompt(settings: AureySettings) -> str
         "- 1Claw hosted-agent token flow: "
         + ("configured" if (settings.oneclaw_agent_id or "").strip() else "not configured"),
         f"- EVM signing mode: {settings.evm_signing_mode}",
-        f"- Alchemy-backed reads/RPC: "
+        "- Alchemy-backed reads/RPC: "
         + (
             "configured"
             if (settings.alchemy_api_key or "").strip()
@@ -165,6 +167,12 @@ def runtime_wiring_context_for_deep_agent_prompt(settings: AureySettings) -> str
             if (settings.telegram_bot_token or "").strip()
             or (settings.telegram_bot_token_secret_path or "").strip()
             else "not configured"
+        ),
+        "- Deep Agent LLM path: "
+        + (
+            "1Claw Shroud proxy"
+            if (settings.llm_proxy or "").strip().lower() == "shroud"
+            else "direct OpenAI-compatible API"
         ),
     ]
     ws = (settings.wallet_signing_key_secret_path or "").strip()
@@ -233,6 +241,7 @@ def create_aurey_deep_agent(
     checkpointer: BaseCheckpointSaver | None = None,
     extra_system_prompt: str | None = None,
     name: str = "aurey_deep_agent",
+    hosted_signing_context: HostedSigningContext | None = None,
 ) -> CompiledStateGraph[Any, Any, Any]:
     """Compile Deep Agents with subgraph-backed tools and optional MemorySaver checkpointer."""
 
@@ -242,6 +251,14 @@ def create_aurey_deep_agent(
     harness_spec = resolve_harness_model_spec(model)
     ensure_aurey_wallet_harness(harness_spec)
 
+    if isinstance(model, str):
+        chat_model = resolve_llm_chat_model_for_graph(
+            runtime,
+            model_spec=model.strip(),
+            hosted_signing_context=hosted_signing_context,
+        )
+    else:
+        chat_model = model
     deny_all_fs = FilesystemPermission(operations=["read", "write"], paths=["/**"], mode="deny")
 
     tools = build_aurey_subgraph_tools(runtime)
@@ -252,7 +269,7 @@ def create_aurey_deep_agent(
         user_sys = f"{user_sys}\n\n{extra_system_prompt.strip()}"
 
     return create_deep_agent(
-        model=model,
+        model=chat_model,
         tools=tools,
         system_prompt=user_sys,
         checkpointer=checkpointer,
