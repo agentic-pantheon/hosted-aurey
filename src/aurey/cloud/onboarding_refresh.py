@@ -60,6 +60,36 @@ def _try_signing_keys_wallet_backfill(
     )
 
 
+def _merge_poll_payloads(
+    list_payload: Mapping[str, Any] | None,
+    conn_payload: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    """Combine app-user list row with connection GET (GET wins on overlapping keys)."""
+
+    if list_payload is None and conn_payload is None:
+        return None
+    merged: dict[str, Any] = {}
+    if conn_payload is not None:
+        merged.update(dict(conn_payload))
+    if list_payload is not None:
+        merged.update(dict(list_payload))
+    if conn_payload is not None:
+        fresh_claim = extract_claim_url(conn_payload)
+        if fresh_claim:
+            merged["claim_url"] = fresh_claim
+    return merged
+
+
+def _apply_poll_payload(row: HostedPlatformUserORM, payload: Mapping[str, Any]) -> None:
+    fresh_claim = extract_claim_url(payload)
+    if fresh_claim:
+        row.claim_url = fresh_claim
+    signals = connection_claim_details(payload)
+    _merge_signals_into_row(row, signals)
+    if should_mark_connection_ready(signals):
+        row.onboarding_state = "ready"
+
+
 def _is_fully_ready_row(row: HostedPlatformUserORM) -> bool:
     return (
         (row.onboarding_state or "").strip() == "ready"
@@ -118,7 +148,7 @@ def refresh_hosted_user_claim_state(
     if not conn:
         return row
 
-    payload: Mapping[str, Any] | None = None
+    list_payload: Mapping[str, Any] | None = None
     app_id = (settings.platform_app_id or "").strip()
 
     if app_id:
@@ -134,38 +164,39 @@ def refresh_hosted_user_claim_state(
         else:
             hit = user_record_for_connection_id(users_payload, conn)
             if hit is not None:
-                payload = hit
+                list_payload = hit
                 _log.debug(
                     "hosted claim poll matched connection_id=%s in app %s users list",
                     conn,
                     app_id,
                 )
 
-    if payload is None:
-        try:
-            payload = platform_client.get_connection(conn)
-        except HostedPlatformApiError as exc:
-            if exc.status_code == 404:
-                _log.debug(
-                    "hosted claim poll skipped HTTP 404 connection_id=%s (%s)",
-                    conn,
-                    exc,
-                )
+    conn_payload: Mapping[str, Any] | None = None
+    try:
+        conn_payload = platform_client.get_connection(conn)
+    except HostedPlatformApiError as exc:
+        if exc.status_code == 404:
+            _log.debug(
+                "hosted claim poll skipped HTTP 404 connection_id=%s (%s)",
+                conn,
+                exc,
+            )
+            if list_payload is None:
                 _try_signing_keys_wallet_backfill(
                     session, settings, platform_client, row, reason="connection_404",
                 )
                 return row
+        else:
             raise
 
-    fresh_claim = extract_claim_url(payload)
-    if fresh_claim:
-        row.claim_url = fresh_claim
+    payload = _merge_poll_payloads(list_payload, conn_payload)
+    if payload is None:
+        _try_signing_keys_wallet_backfill(
+            session, settings, platform_client, row, reason="connection_404",
+        )
+        return row
 
-    signals = connection_claim_details(payload)
-    _merge_signals_into_row(row, signals)
-
-    if should_mark_connection_ready(signals):
-        row.onboarding_state = "ready"
+    _apply_poll_payload(row, payload)
 
     session.flush()
     _try_signing_keys_wallet_backfill(

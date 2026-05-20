@@ -133,6 +133,56 @@ def test_refresh_updates_claim_url_from_connection_get() -> None:
         engine.dispose()
 
 
+def test_refresh_merges_app_users_list_with_connection_get() -> None:
+    app = "ed17c6ee-baff-4fa7-8018-267c22ea95a7"
+    settings = AureySettings(
+        hosted_platform_enabled=True,
+        platform_api_key="plt_test",
+        platform_template_id="tmpl_x",
+        platform_app_id=app,
+    )
+    fake = _FakeConnPlatform(
+        {
+            "conn-a": {
+                "claimed": False,
+                "claim_url": "https://claim.test/from-get",
+            },
+        },
+        app_list_payload={
+            "data": [
+                {
+                    "connection_id": "conn-a",
+                    "status": "active",
+                    "agent_ids": ["agent-from-list"],
+                    "vault_ids": ["vault-from-list"],
+                }
+            ]
+        },
+    )
+    session, engine = _memory_session()
+    try:
+        row = HostedPlatformUserORM(
+            telegram_user_id=1003,
+            telegram_username=None,
+            connection_id="conn-a",
+            claim_url="https://claim.test/old",
+            onboarding_state="awaiting_claim",
+        )
+        session.add(row)
+        session.commit()
+
+        refresh_hosted_user_claim_state(session, settings, fake, 1003)
+        session.refresh(row)
+        assert row.claim_url == "https://claim.test/from-get"
+        assert row.user_agent_id == "agent-from-list"
+        assert row.vault_id == "vault-from-list"
+        assert row.onboarding_state == "awaiting_claim"
+        assert fake.get_calls == ["conn-a"]
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_refresh_marks_ready_via_app_users_list() -> None:
     app = "ed17c6ee-baff-4fa7-8018-267c22ea95a7"
     settings = AureySettings(
@@ -179,7 +229,7 @@ def test_refresh_marks_ready_via_app_users_list() -> None:
         assert refreshed.vault_id == "vault-prod"
         assert refreshed.wallet_address == "0x00000000000000000000000000000000000000aa"
         assert fake.list_calls == [app]
-        assert fake.get_calls == []
+        assert fake.get_calls == ["conn-a"]
     finally:
         session.close()
         engine.dispose()
@@ -243,7 +293,7 @@ def test_refresh_when_users_endpoint_returns_top_level_json_array() -> None:
         assert refreshed.wallet_address is not None
         assert refreshed.wallet_address.startswith("0x")
         assert fake.signing_keys_calls == [agent_uuid]
-        assert fake.get_calls == []
+        assert fake.get_calls == ["conn-a"]
     finally:
         session.close()
         engine.dispose()

@@ -21,6 +21,15 @@ from aurey.settings import AureySettings
 _log = logging.getLogger(__name__)
 
 
+class PollRefreshOnly:
+    """Claim poll updated the row; bootstrap was skipped (user may still be awaiting claim)."""
+
+
+POLL_REFRESH_ONLY = PollRefreshOnly()
+
+BootstrapOutcome = PlatformBootstrapResult | None | PollRefreshOnly
+
+
 class HostedProvisioningError(RuntimeError):
     """Hosted provisioning prerequisites missing or internal consistency failure."""
 
@@ -44,13 +53,15 @@ def _bootstrap_with_recovery(
     template_id: str,
     email: str,
     username: str | None,
-) -> PlatformBootstrapResult | None:
-    """Call Platform bootstrap; on conflict/server errors poll claim state and retry when possible.
+) -> BootstrapOutcome:
+    """Call Platform bootstrap; on conflict/server errors poll claim state when possible.
 
-    Returns ``None`` when claim polling shows the user is already ``ready`` (no bootstrap body).
+    Returns ``None`` when claim polling shows the user is already ``ready``.
+    Returns ``POLL_REFRESH_ONLY`` when poll refreshed metadata / claim URL without bootstrap.
     """
 
     cid = (connection_id or "").strip()
+    claim_before = (row.claim_url or "").strip() if row is not None else ""
     try:
         return platform.bootstrap(cid, template_id)
     except HostedPlatformApiError as exc:
@@ -60,6 +71,24 @@ def _bootstrap_with_recovery(
             refresh_hosted_user_claim_state(session, settings, platform, row)
             if (row.onboarding_state or "").strip() == "ready":
                 return None
+            claim_after = (row.claim_url or "").strip()
+            if claim_after and claim_after != claim_before:
+                return POLL_REFRESH_ONLY
+            if (row.user_agent_id or "").strip() and (row.connection_id or "").strip():
+                _log.warning(
+                    "Platform bootstrap HTTP %s for connection_id=%s; connection already "
+                    "provisioned (agent id present). Skipping users/upsert retry.",
+                    exc.status_code,
+                    cid,
+                )
+                if (row.claim_url or "").strip():
+                    return POLL_REFRESH_ONLY
+                raise HostedPlatformApiError(
+                    "Platform bootstrap failed and no fresh claim URL is available for this "
+                    "connection. Claim links expire quickly—ask 1Claw to reissue claim for "
+                    f"connection {cid} or reset the hosted user.",
+                    status_code=exc.status_code,
+                ) from exc
         upsert = platform.upsert_user_synthetic_email(email=email, display_name=username)
         new_cid = (upsert.connection_id or "").strip()
         if new_cid and new_cid != cid:
@@ -198,6 +227,15 @@ def ensure_telegram_user_provisioned(
                 row.telegram_username = username
             session.flush()
             return row, created_or_refreshed
+        if (row.user_agent_id or "").strip() and (row.vault_id or "").strip():
+            _log.debug(
+                "Skipping Platform re-bootstrap for connection_id=%s (already provisioned, awaiting claim)",
+                connection_id,
+            )
+            if username is not None:
+                row.telegram_username = username
+            session.flush()
+            return row, created_or_refreshed
 
     boot = _bootstrap_with_recovery(
         session=session,
@@ -210,6 +248,12 @@ def ensure_telegram_user_provisioned(
         username=username,
     )
     if boot is None:
+        assert row is not None
+        if username is not None:
+            row.telegram_username = username
+        session.flush()
+        return row, created_or_refreshed
+    if boot is POLL_REFRESH_ONLY:
         assert row is not None
         if username is not None:
             row.telegram_username = username
@@ -271,6 +315,8 @@ def ensure_telegram_user_provisioned(
 
 __all__ = [
     "HostedProvisioningError",
+    "POLL_REFRESH_ONLY",
+    "PollRefreshOnly",
     "ensure_telegram_user_provisioned",
     "synthetic_email_for_telegram_user",
 ]
