@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from aurey.cloud.hosted_credentials import HostedVaultHttpPort, persist_hosted_agent_ocv_credentials
+from aurey.cloud.hosted_email import HostedEmailError, send_claim_invite_email
 from aurey.cloud.models import HostedPlatformUserORM
 from aurey.cloud.onboarding_refresh import refresh_hosted_user_claim_state
 from aurey.cloud.platform_client import (
@@ -35,6 +37,133 @@ class HostedProvisioningError(RuntimeError):
     """Hosted provisioning prerequisites missing or internal consistency failure."""
 
 
+class HostedAwaitingEmailFlow(RuntimeError):
+    """Email verification is incomplete; Telegram should prompt (/start flow), not retry Platform."""
+
+
+def hosted_maybe_mail_claim_invite(
+    settings: AureySettings,
+    session: Session,
+    row: HostedPlatformUserORM,
+    *,
+    prev_claim_url: str | None,
+) -> None:
+    """Send claim email when verified email exists and ``claim_url`` changed (throttled).
+
+    SMTP failures log a warning — Telegram still exposes /start UX.
+    """
+
+    if not settings.hosted_require_verified_email:
+        return
+    if row.email_verified_at is None or not (row.email or "").strip():
+        return
+    if (row.onboarding_state or "").strip() != "awaiting_claim":
+        return
+
+    curl = (row.claim_url or "").strip()
+    if not curl:
+        return
+
+    pv = (prev_claim_url or "").strip()
+    if pv and pv == curl:
+        return
+
+    now = datetime.now(tz=UTC)
+    throttle_s = settings.hosted_claim_email_throttle_seconds
+    prev_sent = row.last_claim_email_sent_at
+    if prev_sent is not None:
+        elapsed = (now - prev_sent).total_seconds()
+        if elapsed < throttle_s and pv == curl:
+            return
+
+    hint = None
+    if row.telegram_username:
+        hint = f"@{row.telegram_username}"
+
+    try:
+        send_claim_invite_email(
+            settings,
+            to_email=row.email or "",
+            claim_url=curl,
+            display_hint=hint,
+        )
+    except HostedEmailError as exc:
+        _log.warning(
+            "Could not deliver claim invite email telegram_user_id=%s: %s",
+            row.telegram_user_id,
+            exc,
+        )
+        return
+
+    row.last_claim_email_sent_at = now
+    session.flush()
+
+
+def effective_platform_contact_email(
+    *,
+    settings: AureySettings,
+    telegram_user_id: int,
+    row: HostedPlatformUserORM | None,
+) -> str:
+    """Platform ``users/upsert`` identity: verified inbox when required, else synthetic."""
+
+    verified = (
+        row is not None
+        and row.email_verified_at is not None
+        and (row.email or "").strip()
+    )
+    if settings.hosted_require_verified_email:
+        if not verified:
+            raise HostedAwaitingEmailFlow()
+        return (row.email or "").strip().lower()
+
+    if verified:
+        return (row.email or "").strip().lower()
+    return synthetic_email_for_telegram_user(
+        telegram_user_id=telegram_user_id,
+        hosted_synthetic_email_domain=settings.hosted_synthetic_email_domain,
+    )
+
+
+def ensure_hosted_telegram_row(
+    session: Session,
+    settings: AureySettings,
+    *,
+    telegram_user_id: int,
+    username: str | None,
+) -> HostedPlatformUserORM | None:
+    """Persist minimal Telegram-hosted row when verified-email onboarding is mandatory.
+
+    Returns ``None`` when ``hosted_require_verified_email`` is false — provisioning creates the row later.
+    """
+
+    if not settings.hosted_platform_enabled:
+        raise HostedProvisioningError(
+            "Hosted platform provisioning requires hosted_platform_enabled.",
+        )
+    existing = session.scalar(
+        select(HostedPlatformUserORM).where(
+            HostedPlatformUserORM.telegram_user_id == telegram_user_id,
+        ),
+    )
+    if existing is not None:
+        if username is not None and (existing.telegram_username or "") != username:
+            existing.telegram_username = username
+        return existing
+    if not settings.hosted_require_verified_email:
+        return None
+    row = HostedPlatformUserORM(
+        telegram_user_id=telegram_user_id,
+        telegram_username=username,
+        connection_id=None,
+        claim_url=None,
+        onboarding_state="awaiting_email",
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
 def _recoverable_bootstrap_error(exc: HostedPlatformApiError) -> bool:
     code = exc.status_code
     if code is None:
@@ -52,7 +181,7 @@ def _bootstrap_with_recovery(
     row: HostedPlatformUserORM | None,
     connection_id: str,
     template_id: str,
-    email: str,
+    upsert_identity_email: str,
     username: str | None,
 ) -> BootstrapOutcome:
     """Call Platform bootstrap; on conflict/server errors poll claim state when possible.
@@ -83,7 +212,10 @@ def _bootstrap_with_recovery(
                 )
                 _reissue_claim_on_row(platform, settings, row, connection_id=cid)
                 return POLL_REFRESH_ONLY
-        upsert = platform.upsert_user_synthetic_email(email=email, display_name=username)
+        upsert = platform.upsert_user_by_email(
+            email=upsert_identity_email,
+            display_name=username,
+        )
         new_cid = (upsert.connection_id or "").strip()
         if new_cid and new_cid != cid:
             _log.info(
@@ -208,16 +340,28 @@ def ensure_telegram_user_provisioned(
 
     api_key = (settings.platform_api_key or "").strip()
     template_id = (settings.platform_template_id or "").strip()
-    email = synthetic_email_for_telegram_user(
-        telegram_user_id=telegram_user_id,
-        hosted_synthetic_email_domain=settings.hosted_synthetic_email_domain,
-    )
 
     existing = session.scalar(
         select(HostedPlatformUserORM).where(
             HostedPlatformUserORM.telegram_user_id == telegram_user_id,
-        )
+        ),
     )
+
+    upsert_identity_email = effective_platform_contact_email(
+        settings=settings,
+        telegram_user_id=telegram_user_id,
+        row=existing,
+    )
+
+    if settings.hosted_require_verified_email:
+        if existing is None:
+            raise HostedProvisioningError(
+                "No hosted onboarding row — tap /start to begin email verification.",
+            )
+        st_early = (existing.onboarding_state or "").strip()
+        if st_early in {"awaiting_email", "awaiting_email_verification"}:
+            raise HostedAwaitingEmailFlow()
+
     if existing is not None:
         conn_ok = bool((existing.connection_id or "").strip())
         claim_ok = bool((existing.claim_url or "").strip())
@@ -240,8 +384,24 @@ def ensure_telegram_user_provisioned(
     row = existing
     connection_id = (existing.connection_id or "").strip() if existing else ""
 
+    prof_st = ((row.onboarding_state or "").strip()) if row is not None else ""
+    if (
+        settings.hosted_require_verified_email
+        and prof_st == "email_verified"
+        and connection_id == ""
+        and upsert_identity_email
+    ):
+        upsert_first = platform.upsert_user_by_email(
+            email=upsert_identity_email,
+            display_name=username,
+        )
+        connection_id = upsert_first.connection_id.strip()
+        assert row is not None
+        row.connection_id = connection_id
+        session.flush()
+
     if not connection_id:
-        upsert = platform.upsert_user_synthetic_email(email=email, display_name=username)
+        upsert = platform.upsert_user_by_email(email=upsert_identity_email, display_name=username)
         connection_id = upsert.connection_id
 
     claim_before_refresh = (row.claim_url or "").strip() if row is not None else ""
@@ -251,22 +411,33 @@ def ensure_telegram_user_provisioned(
         and (connection_id or "").strip()
     ):
         refresh_hosted_user_claim_state(session, settings, platform, row)
+        hosted_maybe_mail_claim_invite(settings, session, row, prev_claim_url=claim_before_refresh)
+        claim_mid = (row.claim_url or "").strip()
         if (row.onboarding_state or "").strip() == "ready":
             if username is not None:
                 row.telegram_username = username
             session.flush()
             return row, created_or_refreshed
-        claim_after_refresh = (row.claim_url or "").strip()
-        if claim_after_refresh and claim_after_refresh != claim_before_refresh:
+        if claim_mid and claim_mid != claim_before_refresh:
             if username is not None:
                 row.telegram_username = username
             session.flush()
             return row, created_or_refreshed
+        snap_before_reissue = claim_mid
         if _try_reissue_claim_after_poll(
-            platform, settings, row, connection_id=connection_id
+            platform,
+            settings,
+            row,
+            connection_id=connection_id,
         ):
             if username is not None:
                 row.telegram_username = username
+            hosted_maybe_mail_claim_invite(
+                settings,
+                session,
+                row,
+                prev_claim_url=snap_before_reissue,
+            )
             session.flush()
             return row, created_or_refreshed
 
@@ -277,19 +448,21 @@ def ensure_telegram_user_provisioned(
         row=row,
         connection_id=connection_id,
         template_id=template_id,
-        email=email,
+        upsert_identity_email=upsert_identity_email,
         username=username,
     )
     if boot is None:
         assert row is not None
         if username is not None:
             row.telegram_username = username
+        hosted_maybe_mail_claim_invite(settings, session, row, prev_claim_url=claim_before_refresh)
         session.flush()
         return row, created_or_refreshed
     if boot is POLL_REFRESH_ONLY:
         assert row is not None
         if username is not None:
             row.telegram_username = username
+        hosted_maybe_mail_claim_invite(settings, session, row, prev_claim_url=claim_before_refresh)
         session.flush()
         return row, created_or_refreshed
 
@@ -322,6 +495,7 @@ def ensure_telegram_user_provisioned(
         row.connection_id = connection_id
         row.claim_url = boot.claim_url
         row.vault_id = boot.vault_id
+        row.onboarding_state = "awaiting_claim"
         if boot.user_agent_id is not None:
             row.user_agent_id = boot.user_agent_id
         _merge_wallet(boot.wallet_address)
@@ -343,13 +517,20 @@ def ensure_telegram_user_provisioned(
         )
 
     session.flush()
+
+    hosted_maybe_mail_claim_invite(settings, session, row, prev_claim_url=claim_before_refresh)
+    session.flush()
     return row, created_or_refreshed
 
 
 __all__ = [
+    "HostedAwaitingEmailFlow",
     "HostedProvisioningError",
     "POLL_REFRESH_ONLY",
     "PollRefreshOnly",
+    "effective_platform_contact_email",
+    "ensure_hosted_telegram_row",
     "ensure_telegram_user_provisioned",
+    "hosted_maybe_mail_claim_invite",
     "synthetic_email_for_telegram_user",
 ]

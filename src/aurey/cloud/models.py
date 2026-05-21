@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, String, Text, Uuid, func, text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, Uuid, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -25,13 +25,22 @@ class HostedPlatformUserORM(Base):
     )
     telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
     telegram_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    connection_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    claim_url: Mapped[str] = mapped_column(Text, nullable=False)
+    connection_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    claim_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     onboarding_state: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
         default="awaiting_claim",
         server_default=text("'awaiting_claim'"),
+    )
+    email: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_claim_email_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
     vault_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     user_agent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -51,4 +60,31 @@ class HostedPlatformUserORM(Base):
     )
 
 
-__all__ = ["Base", "HostedPlatformUserORM"]
+class HostedEmailVerificationORM(Base):
+    """Ephemeral OTP row for verifying an email before Platform upsert."""
+
+    __tablename__ = "hosted_email_verifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    hosted_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("hosted_platform_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    email: Mapped[str] = mapped_column(String(512), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+__all__ = ["Base", "HostedEmailVerificationORM", "HostedPlatformUserORM"]
