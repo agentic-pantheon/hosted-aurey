@@ -914,11 +914,16 @@ def build_telegram_application(
         chat_id_raw = getattr(chat, "id", None)
         cid_opt = int(chat_id_raw) if chat_id_raw is not None else None
         if not _telegram_chat_is_allowed(cid_opt, allowed_chats):
-            gate_log.debug("Telegram /start ignored (disallowed chat_id=%r)", chat_id_raw)
+            gate_log.warning(
+                "Telegram /start ignored (chat_id=%r not in AUREY_TELEGRAM_ALLOWED_CHAT_IDS)",
+                chat_id_raw,
+            )
             return
         msg = update.effective_message
         if msg is None:
             return
+        uid_log = getattr(update.effective_user, "id", None)
+        gate_log.info("Telegram /start chat_id=%s telegram_user_id=%s", chat_id_raw, uid_log)
         cfg = state.settings
         db_url = (cfg.database_url or "").strip()
         if cfg.hosted_platform_enabled and db_url and state.hosted_session_factory is not None:
@@ -1014,7 +1019,16 @@ def build_telegram_application(
             if cid_opt is not None:
                 typing_done, typing_task = _telegram_begin_typing_pump(context.bot, cid_opt)
             try:
+                gate_log.info(
+                    "Hosted /start provisioning begin telegram_user_id=%s",
+                    telegram_user_id,
+                )
                 claim_url, onboard = await asyncio.to_thread(_provision_sync)
+                gate_log.info(
+                    "Hosted /start provisioning done telegram_user_id=%s onboard=%r",
+                    telegram_user_id,
+                    onboard,
+                )
             except HostedAwaitingEmailFlow:
                 await msg.reply_text(
                     "<b>Aurey</b>\n"
