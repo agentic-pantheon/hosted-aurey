@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 from aurey.cloud.hosted_credentials import HostedSecretsCipher, agent_api_key_secret_path
 from aurey.cloud.models import Base, HostedPlatformUserORM
-from aurey.cloud.platform_client import HostedPlatformApiError, PlatformBootstrapResult, PlatformUpsertResult
+from aurey.cloud.platform_client import HostedPlatformApiError, PlatformBootstrapResult, PlatformReissueClaimResult, PlatformUpsertResult
 from aurey.cloud.provision import HostedProvisioningError, ensure_telegram_user_provisioned
 from aurey.custody.secret_store import FakeOneClawClient
 from aurey.graphs.evm_codec import to_checksum_evm_address
@@ -53,6 +53,14 @@ class _FakePlatform:
     def list_app_users(self, app_id: str):
         _ = app_id
         return {}
+
+    def reissue_claim(self, connection_id: str, *, return_to: str | None = None):
+        _ = return_to
+        return PlatformReissueClaimResult(
+            claim_url=f"https://claim.test/reissued/{connection_id}",
+            connection_id=connection_id,
+            expires_in=600,
+        )
 
     def get_agent_signing_keys(self, agent_id: str) -> dict:
         self.signing_keys_calls.append(agent_id)
@@ -106,6 +114,7 @@ def test_ensure_telegram_user_provisioned_rebootstraps_while_awaiting_claim() ->
         assert row2.id == row.id
         assert fake.upserts == 1
         assert fake.bootstraps == 1
+        assert row2.claim_url == "https://claim.test/reissued/conn-determined"
     finally:
         session.close()
         engine.dispose()
@@ -194,6 +203,7 @@ def test_bootstrap_500_skips_upsert_when_connection_already_provisioned() -> Non
             def __init__(self) -> None:
                 self.bootstraps = 0
                 self.upserts = 0
+                self.reissues = 0
 
             def upsert_user_synthetic_email(self, *, email: str, display_name: str | None):
                 _ = email, display_name
@@ -201,9 +211,18 @@ def test_bootstrap_500_skips_upsert_when_connection_already_provisioned() -> Non
                 raise AssertionError("upsert must not run when agent already provisioned")
 
             def bootstrap(self, connection_id: str, template_id: str) -> PlatformBootstrapResult:
-                _ = template_id
+                _ = connection_id, template_id
                 self.bootstraps += 1
                 raise HostedPlatformApiError("Platform HTTP 500", status_code=500)
+
+            def reissue_claim(self, connection_id: str, *, return_to: str | None = None):
+                _ = return_to
+                self.reissues += 1
+                return PlatformReissueClaimResult(
+                    claim_url="https://claim.test/fresh",
+                    connection_id=connection_id,
+                    expires_in=600,
+                )
 
             def list_app_users(self, app_id: str):
                 _ = app_id
@@ -237,8 +256,10 @@ def test_bootstrap_500_skips_upsert_when_connection_already_provisioned() -> Non
         session.commit()
         assert refreshed is True
         assert out.user_agent_id == "agent-live"
+        assert out.claim_url == "https://claim.test/fresh"
         assert fake.bootstraps == 0
         assert fake.upserts == 0
+        assert fake.reissues == 1
     finally:
         session.close()
         engine.dispose()

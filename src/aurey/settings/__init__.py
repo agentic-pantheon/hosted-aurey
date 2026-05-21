@@ -116,6 +116,14 @@ class AureySettings(BaseSettings):
             "Empty until a template is registered."
         ),
     )
+    platform_claim_return_to: str = Field(
+        default="",
+        description=(
+            "Optional ``return_to`` URL sent to Platform ``reissue-claim`` (OAuth-style callback). "
+            "Leave empty when not used."
+        ),
+        validation_alias=AliasChoices("AUREY_PLATFORM_CLAIM_RETURN_TO"),
+    )
     operator_vault_id: str = Field(
         default="",
         description=(

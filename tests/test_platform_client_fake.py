@@ -21,3 +21,23 @@ def test_extract_claim_url_variants() -> None:
     assert extract_claim_url({"claim_url": "https://claim/u"}) == "https://claim/u"
     assert extract_claim_url({"data": {"claimUrl": "https://alt"}}) == "https://alt"
     assert extract_claim_url({"data": {"url": "https://u"}}) == "https://u"
+
+
+def test_reissue_claim_parses_response() -> None:
+    from unittest.mock import patch
+
+    from aurey.cloud.platform_client import OneClawPlatformClient
+
+    client = OneClawPlatformClient(base_url="https://api.example", api_key="plt_test")
+    body = {
+        "claim_url": "https://1claw.xyz/connect/app/claim/ct_abc",
+        "claim_token": "ct_abc",
+        "expires_in": 600,
+        "connection_id": "conn-1",
+    }
+    with patch.object(client, "_post_json", return_value=body):
+        out = client.reissue_claim("conn-1", return_to="https://app.example/cb")
+    assert out.claim_url.startswith("https://1claw.xyz")
+    assert out.claim_token == "ct_abc"
+    assert out.expires_in == 600
+    assert out.connection_id == "conn-1"

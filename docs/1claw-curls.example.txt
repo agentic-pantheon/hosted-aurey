@@ -103,6 +103,13 @@ curl -X POST "https://api.1claw.xyz/v1/platform/connections/${CONNECTION_ID}/boo
   -H "Content-Type: application/json" \
   -d "{ \"template_id\": \"${TEMPLATE_ID}\" }"
 
+# --- Fresh claim link (bootstrapped connection, expired claim token) ---
+
+curl -X POST "https://api.1claw.xyz/v1/platform/connections/${CONNECTION_ID}/reissue-claim" \
+  -H "Authorization: Bearer ${PLATFORM_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{ "return_to": "https://your-app.example/onboarding/done" }'
+
 # --- List app users (claim / onboarding debugging) ---
 
 curl -sS "https://api.1claw.xyz/v1/platform/apps/${PLATFORM_APP_ID}/users" \

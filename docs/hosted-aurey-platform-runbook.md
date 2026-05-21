@@ -10,6 +10,8 @@ Operators use the [1Claw Platform API](https://docs.1claw.xyz) to register apps,
 
 Never commit `plt_` keys; use secrets managers or deployment env config only.
 
+When a hosted user’s claim link expires, Aurey calls **`POST /v1/platform/connections/{connection_id}/reissue-claim`** on `/start` (after claim-state poll) for bootstrapped connections still in `awaiting_claim`. Optional env: **`AUREY_PLATFORM_CLAIM_RETURN_TO`** for the JSON `return_to` field.
+
 ## 2. Define a provisioning template (sketch)
 
 Author a **template** JSON (exact schema per Platform docs) that describes:

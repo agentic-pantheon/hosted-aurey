@@ -186,6 +186,16 @@ class PlatformUpsertResult:
 
 
 @dataclass(frozen=True)
+class PlatformReissueClaimResult:
+    """Fresh claim link from ``POST .../connections/{id}/reissue-claim``."""
+
+    claim_url: str
+    connection_id: str | None = None
+    claim_token: str | None = None
+    expires_in: int | None = None
+
+
+@dataclass(frozen=True)
 class PlatformBootstrapResult:
     """Bootstrap output; ``agent_api_key`` is the per-user ``ocv_`` from ``summary.agent_api_key`` when present."""
 
@@ -390,6 +400,53 @@ class OneClawPlatformClient:
             wallet_address=wallet_address,
         )
 
+    def reissue_claim(
+        self,
+        connection_id: str,
+        *,
+        return_to: str | None = None,
+    ) -> PlatformReissueClaimResult:
+        """Mint a fresh claim URL for an already-bootstrapped connection (Platform ``plt_`` key)."""
+
+        cid = (connection_id or "").strip()
+        if not cid:
+            raise ValueError("connection_id must not be empty.")
+        body: dict[str, Any] = {}
+        rt = (return_to or "").strip()
+        if rt:
+            body["return_to"] = rt
+        path = f"v1/platform/connections/{cid}/reissue-claim"
+        payload = self._post_json(path, body)
+        claim = extract_claim_url(payload)
+        if claim is None:
+            raise HostedPlatformApiError(
+                "Reissue-claim JSON missing claim URL (claim_url, data.claim_url, or url)."
+            )
+        resolved_cid = extract_connection_id(payload) or extract_optional_str(
+            payload,
+            ("connection_id",),
+            ("data", "connection_id"),
+        )
+        claim_token = extract_optional_str(
+            payload,
+            ("claim_token",),
+            ("data", "claim_token"),
+        )
+        expires_raw = _dig_mapping(payload, "expires_in")
+        if expires_raw is None:
+            expires_raw = _dig_mapping(payload, "data", "expires_in")
+        expires_in: int | None = None
+        if isinstance(expires_raw, int):
+            expires_in = expires_raw
+        elif isinstance(expires_raw, float):
+            expires_in = int(expires_raw)
+        return PlatformReissueClaimResult(
+            claim_url=claim,
+            connection_id=resolved_cid or cid,
+            claim_token=claim_token,
+            expires_in=expires_in,
+        )
+
     def get_agent_signing_keys(self, agent_id: str) -> dict[str, Any]:
         """GET ``/v1/agents/{agent_id}/signing-keys``; returns parsed JSON object."""
 
@@ -406,6 +463,7 @@ __all__ = [
     "HostedPlatformApiError",
     "OneClawPlatformClient",
     "PlatformBootstrapResult",
+    "PlatformReissueClaimResult",
     "PlatformUpsertResult",
     "ethereum_address_from_signing_keys_payload",
     "extract_claim_url",

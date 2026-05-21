@@ -14,6 +14,7 @@ from aurey.cloud.platform_client import (
     HostedPlatformApiError,
     OneClawPlatformClient,
     PlatformBootstrapResult,
+    PlatformReissueClaimResult,
 )
 from aurey.cloud.wallet_sync import maybe_backfill_wallet_from_signing_keys
 from aurey.settings import AureySettings
@@ -74,21 +75,14 @@ def _bootstrap_with_recovery(
             claim_after = (row.claim_url or "").strip()
             if claim_after and claim_after != claim_before:
                 return POLL_REFRESH_ONLY
-            if (row.user_agent_id or "").strip() and (row.connection_id or "").strip():
+            if _connection_bootstrapped_for_claim(row):
                 _log.warning(
-                    "Platform bootstrap HTTP %s for connection_id=%s; connection already "
-                    "provisioned (agent id present). Skipping users/upsert retry.",
+                    "Platform bootstrap HTTP %s for connection_id=%s; reissuing claim link.",
                     exc.status_code,
                     cid,
                 )
-                if (row.claim_url or "").strip():
-                    return POLL_REFRESH_ONLY
-                raise HostedPlatformApiError(
-                    "Platform bootstrap failed and no fresh claim URL is available for this "
-                    "connection. Claim links expire quickly—ask 1Claw to reissue claim for "
-                    f"connection {cid} or reset the hosted user.",
-                    status_code=exc.status_code,
-                ) from exc
+                _reissue_claim_on_row(platform, settings, row, connection_id=cid)
+                return POLL_REFRESH_ONLY
         upsert = platform.upsert_user_synthetic_email(email=email, display_name=username)
         new_cid = (upsert.connection_id or "").strip()
         if new_cid and new_cid != cid:
@@ -106,6 +100,48 @@ def _bootstrap_with_recovery(
             "to reset the Platform connection for this user.",
             status_code=exc.status_code,
         ) from exc
+
+
+def _connection_bootstrapped_for_claim(row: HostedPlatformUserORM) -> bool:
+    return bool((row.user_agent_id or "").strip() and (row.connection_id or "").strip())
+
+
+def _reissue_claim_on_row(
+    platform: OneClawPlatformClient,
+    settings: AureySettings,
+    row: HostedPlatformUserORM,
+    *,
+    connection_id: str,
+) -> PlatformReissueClaimResult:
+    cid = (connection_id or row.connection_id or "").strip()
+    return_to = (settings.platform_claim_return_to or "").strip() or None
+    issued = platform.reissue_claim(cid, return_to=return_to)
+    row.claim_url = issued.claim_url
+    if issued.connection_id:
+        row.connection_id = issued.connection_id.strip()
+    _log.info(
+        "Platform reissue-claim connection_id=%s expires_in=%s",
+        cid,
+        issued.expires_in,
+    )
+    return issued
+
+
+def _try_reissue_claim_after_poll(
+    platform: OneClawPlatformClient,
+    settings: AureySettings,
+    row: HostedPlatformUserORM,
+    *,
+    connection_id: str,
+) -> bool:
+    """Reissue when bootstrapped but still awaiting claim. Returns True when claim URL was minted."""
+
+    if (row.onboarding_state or "").strip() != "awaiting_claim":
+        return False
+    if not _connection_bootstrapped_for_claim(row):
+        return False
+    _reissue_claim_on_row(platform, settings, row, connection_id=connection_id)
+    return True
 
 
 def synthetic_email_for_telegram_user(
@@ -161,9 +197,8 @@ def ensure_telegram_user_provisioned(
 
     Returns ``(row, created_or_refreshed)``. The second value is ``False`` only when the user
     is already fully onboarded (``onboarding_state`` ``ready`` with claim metadata present);
-    users still ``awaiting_claim`` poll Platform claim state first, then bootstrap (or refresh
-    ``claim_url`` from connection GET) so expired links and already-claimed users do not hit
-    a blind re-bootstrap that returns HTTP 500.
+    users still ``awaiting_claim`` poll Platform claim state first, then reissue claim when
+    already bootstrapped, otherwise bootstrap for first-time provisioning.
     """
 
     if not settings.hosted_platform_enabled:
@@ -227,11 +262,9 @@ def ensure_telegram_user_provisioned(
                 row.telegram_username = username
             session.flush()
             return row, created_or_refreshed
-        if (row.user_agent_id or "").strip() and (row.vault_id or "").strip():
-            _log.debug(
-                "Skipping Platform re-bootstrap for connection_id=%s (already provisioned, awaiting claim)",
-                connection_id,
-            )
+        if _try_reissue_claim_after_poll(
+            platform, settings, row, connection_id=connection_id
+        ):
             if username is not None:
                 row.telegram_username = username
             session.flush()
