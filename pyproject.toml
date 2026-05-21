@@ -46,7 +46,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-aurey = ["data/*.json"]
+aurey = ["data/*.json", "cloud/email_assets/*.jpg", "cloud/email_assets/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

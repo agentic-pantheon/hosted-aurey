@@ -8,7 +8,12 @@ from sqlalchemy.orm import sessionmaker
 
 from aurey.cloud.hosted_credentials import HostedSecretsCipher, agent_api_key_secret_path
 from aurey.cloud.models import Base, HostedPlatformUserORM
-from aurey.cloud.platform_client import HostedPlatformApiError, PlatformBootstrapResult, PlatformReissueClaimResult, PlatformUpsertResult
+from aurey.cloud.platform_client import (
+    HostedPlatformApiError,
+    PlatformBootstrapResult,
+    PlatformReissueClaimResult,
+    PlatformUpsertResult,
+)
 from aurey.cloud.provision import HostedProvisioningError, ensure_telegram_user_provisioned
 from aurey.custody.secret_store import FakeOneClawClient
 from aurey.graphs.evm_codec import to_checksum_evm_address
@@ -32,6 +37,14 @@ class _FakePlatform:
         _ = email, display_name
         self.upserts += 1
         return PlatformUpsertResult(connection_id="conn-determined")
+
+    def upsert_user_by_email(
+        self,
+        *,
+        email: str,
+        display_name: str | None,
+    ) -> PlatformUpsertResult:
+        return self.upsert_user_synthetic_email(email=email, display_name=display_name)
 
     def bootstrap(self, connection_id: str, template_id: str) -> PlatformBootstrapResult:
         _ = template_id
@@ -77,6 +90,7 @@ def _memory_session():
 def test_ensure_telegram_user_provisioned_rebootstraps_while_awaiting_claim() -> None:
     settings = AureySettings(
         hosted_platform_enabled=True,
+        hosted_require_verified_email=False,
         platform_api_key="plt_fake",
         platform_template_id="tmpl_1",
     )
@@ -123,6 +137,7 @@ def test_ensure_telegram_user_provisioned_rebootstraps_while_awaiting_claim() ->
 def test_awaiting_claim_polls_ready_before_bootstrap() -> None:
     settings = AureySettings(
         hosted_platform_enabled=True,
+        hosted_require_verified_email=False,
         platform_api_key="plt_fake",
         platform_template_id="tmpl_1",
     )
@@ -145,6 +160,9 @@ def test_awaiting_claim_polls_ready_before_bootstrap() -> None:
             def upsert_user_synthetic_email(self, *, email: str, display_name: str | None):
                 _ = email, display_name
                 return PlatformUpsertResult(connection_id="conn-claimed")
+
+            def upsert_user_by_email(self, *, email: str, display_name: str | None):
+                return self.upsert_user_synthetic_email(email=email, display_name=display_name)
 
             def bootstrap(self, connection_id: str, template_id: str) -> PlatformBootstrapResult:
                 _ = connection_id, template_id
@@ -183,6 +201,7 @@ def test_awaiting_claim_polls_ready_before_bootstrap() -> None:
 def test_bootstrap_500_skips_upsert_when_connection_already_provisioned() -> None:
     settings = AureySettings(
         hosted_platform_enabled=True,
+        hosted_require_verified_email=False,
         platform_api_key="plt_fake",
         platform_template_id="tmpl_1",
         platform_app_id="app-1",
@@ -209,6 +228,9 @@ def test_bootstrap_500_skips_upsert_when_connection_already_provisioned() -> Non
                 _ = email, display_name
                 self.upserts += 1
                 raise AssertionError("upsert must not run when agent already provisioned")
+
+            def upsert_user_by_email(self, *, email: str, display_name: str | None):
+                return self.upsert_user_synthetic_email(email=email, display_name=display_name)
 
             def bootstrap(self, connection_id: str, template_id: str) -> PlatformBootstrapResult:
                 _ = connection_id, template_id
@@ -268,6 +290,7 @@ def test_bootstrap_500_skips_upsert_when_connection_already_provisioned() -> Non
 def test_bootstrap_500_recovers_via_new_connection_from_upsert() -> None:
     settings = AureySettings(
         hosted_platform_enabled=True,
+        hosted_require_verified_email=False,
         platform_api_key="plt_fake",
         platform_template_id="tmpl_1",
     )
@@ -292,6 +315,9 @@ def test_bootstrap_500_recovers_via_new_connection_from_upsert() -> None:
                 _ = email, display_name
                 self.upserts += 1
                 return PlatformUpsertResult(connection_id="conn-fresh")
+
+            def upsert_user_by_email(self, *, email: str, display_name: str | None):
+                return self.upsert_user_synthetic_email(email=email, display_name=display_name)
 
             def bootstrap(self, connection_id: str, template_id: str) -> PlatformBootstrapResult:
                 _ = template_id
@@ -338,6 +364,7 @@ def test_bootstrap_500_recovers_via_new_connection_from_upsert() -> None:
 def test_ensure_telegram_user_provisioned_skips_network_when_ready() -> None:
     settings = AureySettings(
         hosted_platform_enabled=True,
+        hosted_require_verified_email=False,
         platform_api_key="plt_fake",
         platform_template_id="tmpl_1",
     )
@@ -404,9 +431,84 @@ def test_synthetic_email_normalizes_domain() -> None:
     assert e == "tg_7@my.test"
 
 
+def test_verified_email_used_for_platform_upsert_not_synthetic() -> None:
+    from datetime import UTC, datetime
+
+    from aurey.cloud.provision import (
+        HostedAwaitingEmailFlow,
+        effective_platform_contact_email,
+    )
+
+    settings = AureySettings(
+        hosted_platform_enabled=True,
+        hosted_require_verified_email=True,
+        platform_api_key="plt_fake",
+        platform_template_id="tmpl_1",
+    )
+    session, engine = _memory_session()
+    try:
+        row = HostedPlatformUserORM(
+            telegram_user_id=42,
+            onboarding_state="email_verified",
+            email="Alice@Example.COM",
+            email_verified_at=datetime.now(tz=UTC),
+        )
+        session.add(row)
+        session.commit()
+
+        assert (
+            effective_platform_contact_email(
+                settings=settings,
+                telegram_user_id=42,
+                row=row,
+            )
+            == "alice@example.com"
+        )
+
+        with pytest.raises(HostedAwaitingEmailFlow):
+            effective_platform_contact_email(
+                settings=settings,
+                telegram_user_id=99,
+                row=None,
+            )
+
+        class _EmailCapturingPlatform(_FakePlatform):
+            def __init__(self) -> None:
+                super().__init__()
+                self.captured_upsert_email = ""
+
+            def upsert_user_by_email(
+                self,
+                *,
+                email: str,
+                display_name: str | None,
+            ) -> PlatformUpsertResult:
+                self.captured_upsert_email = email
+                return super().upsert_user_by_email(email=email, display_name=display_name)
+
+        fake = _EmailCapturingPlatform()
+        row2, refreshed = ensure_telegram_user_provisioned(
+            session,
+            settings,
+            fake,
+            telegram_user_id=42,
+            username="alice",
+        )
+        session.commit()
+        assert refreshed is True
+        assert fake.captured_upsert_email == "alice@example.com"
+        assert "tg_42@" not in fake.captured_upsert_email
+        assert row2.connection_id == "conn-determined"
+        assert row2.onboarding_state == "awaiting_claim"
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_partial_row_bootstraps_only() -> None:
     settings = AureySettings(
         hosted_platform_enabled=True,
+        hosted_require_verified_email=False,
         platform_api_key="plt_fake",
         platform_template_id="tmpl_1",
     )
@@ -447,6 +549,7 @@ def test_provision_dual_writes_ocv_when_vault_client_configured() -> None:
     raw_key = Fernet.generate_key().decode("ascii")
     settings = AureySettings(
         hosted_platform_enabled=True,
+        hosted_require_verified_email=False,
         platform_api_key="plt_fake",
         platform_template_id="tmpl_1",
         oneclaw_vault_id="vault-op",

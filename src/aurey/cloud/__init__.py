@@ -10,7 +10,7 @@ from aurey.cloud.hosted_credentials import (
     persist_hosted_agent_ocv_credentials,
     resolve_hosted_ocv_for_signing,
 )
-from aurey.cloud.models import Base, HostedPlatformUserORM
+from aurey.cloud.models import Base, HostedEmailVerificationORM, HostedPlatformUserORM
 from aurey.cloud.onboarding_refresh import refresh_hosted_user_claim_state
 from aurey.cloud.platform_client import (
     HostedPlatformApiError,
@@ -19,7 +19,9 @@ from aurey.cloud.platform_client import (
     PlatformUpsertResult,
 )
 from aurey.cloud.provision import (
+    HostedAwaitingEmailFlow,
     HostedProvisioningError,
+    ensure_hosted_telegram_row,
     ensure_telegram_user_provisioned,
     synthetic_email_for_telegram_user,
 )
@@ -32,10 +34,13 @@ from aurey.cloud.signing_context import (
 
 __all__ = [
     "Base",
+    "HostedAwaitingEmailFlow",
+    "HostedEmailVerificationORM",
     "HostedPlatformApiError",
     "HostedSecretsCipher",
     "HostedSigningContext",
     "HostedPlatformUserORM",
+    "ensure_hosted_telegram_row",
     "HostedProvisioningError",
     "HostedVaultHttpPort",
     "OneClawPlatformClient",

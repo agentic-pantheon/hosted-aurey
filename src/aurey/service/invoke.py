@@ -73,6 +73,9 @@ def _is_transient_llm_error(exc: BaseException) -> bool:
     return False
 
 
+HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY = "hosted_wallet_from_server"
+
+
 def _resolve_hosted_wallet_address_hint(
     context: dict[str, Any],
     *,
@@ -81,18 +84,24 @@ def _resolve_hosted_wallet_address_hint(
 ) -> str | None:
     """Return checksummed EVM wallet from invoke context or signing context.
 
-    When ``hosted_platform_enabled``, ignore client-supplied ``hosted_wallet_address`` in
-    ``context`` (HTTP invoke must not steer the binding).
+    When ``hosted_platform_enabled``, ignore client-supplied ``hosted_wallet_address`` on
+    HTTP ``/v1/invoke``. Telegram sets ``hosted_wallet_from_server`` when the address comes
+    from Postgres (provisioning / signing-keys backfill).
     """
 
     raw: str | None = None
-    if not hosted_platform_enabled:
+    if hosted_signing_context is not None:
+        w = (hosted_signing_context.wallet_address or "").strip()
+        if w:
+            raw = w
+    if not raw and context.get(HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY) is True:
         v = context.get("hosted_wallet_address")
         if isinstance(v, str) and v.strip():
             raw = v.strip()
-    if not raw and hosted_signing_context is not None:
-        w = (hosted_signing_context.wallet_address or "").strip()
-        raw = w or None
+    if not raw and not hosted_platform_enabled:
+        v = context.get("hosted_wallet_address")
+        if isinstance(v, str) and v.strip():
+            raw = v.strip()
     if not raw:
         return None
     try:
@@ -122,7 +131,9 @@ def _invoke_graph_with_transient_retries(
 
     messages: list[Any] = []
     if hosted_wallet_address:
-        messages.append(SystemMessage(content=_hosted_wallet_system_turn_line(hosted_wallet_address)))
+        messages.append(
+            SystemMessage(content=_hosted_wallet_system_turn_line(hosted_wallet_address))
+        )
     messages.append(HumanMessage(content=message))
     payload = {"messages": messages}
     last_exc: BaseException | None = None
@@ -181,9 +192,7 @@ def invoke_deep_agent_turn(
     )
 
     if svc is None:
-        err_msg = (
-            "The service is missing required configuration or bootstrap credentials."
-        )
+        err_msg = "The service is missing required configuration or bootstrap credentials."
         _log.info(
             "error  %s",
             _kv_line(session=session_id, code="service_misconfigured", detail=_log_clip(err_msg)),
@@ -234,15 +243,11 @@ def invoke_deep_agent_turn(
 
     settings = svc.settings
     hosted_for_graph = (
-        hosted_signing_context
-        if (settings.llm_proxy or "").strip().lower() == "shroud"
-        else None
+        hosted_signing_context if (settings.llm_proxy or "").strip().lower() == "shroud" else None
     )
     if hosted_for_graph is not None:
         if not hosted_shroud_llm_credentials_ready(svc.runtime, hosted_for_graph):
-            err_msg = (
-                "Hosted LLM (Shroud) requires a provisioned agent API key for this user."
-            )
+            err_msg = "Hosted LLM (Shroud) requires a provisioned agent API key for this user."
             _log.info(
                 "error  %s",
                 _kv_line(

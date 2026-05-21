@@ -36,8 +36,282 @@ def _telegram_chat_is_allowed(chat_id: int | None, allowed: frozenset[int] | Non
     return chat_id in allowed
 
 
+_HOSTED_AGENT_BLOCK_EMAIL_STATES = frozenset(
+    {
+        "awaiting_email",
+        "awaiting_email_verification",
+    }
+)
+
+_HOSTED_CHAT_EMAIL_REPLY_STATES = frozenset(
+    {
+        "awaiting_email",
+        "awaiting_email_verification",
+    }
+)
+
+_HOSTED_EMAIL_CANCEL_STATES = frozenset(
+    {
+        "awaiting_email",
+        "awaiting_email_verification",
+        "email_verified",
+    }
+)
+
+
 def _hosted_finish_claim_short_message() -> str:
     return "Finish hosted setup first: open the claim link from /start, then message me again."
+
+
+def _hosted_finish_claim_via_email_short_message(*, verified_email_required: bool) -> str:
+    if verified_email_required:
+        return (
+            "Finish hosted setup first — check your email (and spam/junk) for the latest claim "
+            "link, open it once (set your password there), then message me again."
+        )
+    return _hosted_finish_claim_short_message()
+
+
+def _hosted_inbox_verified(row: object) -> bool:
+    """True when the hosted row has a verified real email (not claim completion)."""
+
+    from aurey.cloud.models import HostedPlatformUserORM
+
+    if not isinstance(row, HostedPlatformUserORM):
+        return False
+    if row.email_verified_at is None:
+        return False
+    return bool((row.email or "").strip())
+
+
+def _hosted_blocked_email_prompt_message(onboarding_state: str) -> str:
+    """Short instruction when onboarding has not reached claim yet."""
+
+    st = (onboarding_state or "").strip()
+    if st == "awaiting_email":
+        return (
+            "Reply with your real email address to receive a verification code "
+            "(one email per message). Check spam/junk if the code does not arrive."
+        )
+    if st == "awaiting_email_verification":
+        return (
+            "Reply with the 6-digit code we emailed you. If you do not see it, check spam/junk."
+        )
+    if st == "email_verified":
+        return (
+            "Provisioning — tap /start in a moment to receive your claim link by email "
+            "(check spam/junk if needed)."
+        )
+    return "Tap /start to continue Aurey setup."
+
+
+def _hosted_snapshot_row_onboarding_claim(
+    state: AureyServiceState,
+    *,
+    telegram_user_id: int,
+) -> tuple[str | None, str | None]:
+    """Return `(onboarding_state, claim_url)` from DB without mutating."""
+
+    cfg = state.settings
+    if not cfg.hosted_platform_enabled or not (cfg.database_url or "").strip():
+        return None, None
+    factory = state.hosted_session_factory
+    if factory is None:
+        return None, None
+
+    from sqlalchemy import select
+
+    from aurey.cloud.models import HostedPlatformUserORM
+
+    db = factory()
+    try:
+        row = db.scalar(
+            select(HostedPlatformUserORM).where(
+                HostedPlatformUserORM.telegram_user_id == telegram_user_id,
+            ),
+        )
+        if row is None:
+            return None, None
+        onboard = (row.onboarding_state or "").strip()
+        cu = (row.claim_url or "").strip()
+        return onboard, cu or None
+    finally:
+        db.close()
+
+
+async def hosted_handle_optional_email_onboarding_chat(
+    *,
+    state: AureyServiceState,
+    telegram_user_id: int,
+    telegram_username: str | None,
+    text: str,
+) -> str | None:
+    """Handle email OTP chat steps; returns Telegram reply HTML text or ``None``."""
+
+    cfg = state.settings
+    db_url = (cfg.database_url or "").strip()
+    if not cfg.hosted_platform_enabled or not db_url or not cfg.hosted_require_verified_email:
+        return None
+    factory = state.hosted_session_factory
+    if factory is None:
+        return None
+
+    trimmed_raw = text.strip()
+    trimmed_lower = trimmed_raw.lower()
+    wants_cancel = trimmed_lower.startswith("/cancel")
+    onboarding_before, _cu0 = _hosted_snapshot_row_onboarding_claim(
+        state, telegram_user_id=telegram_user_id
+    )
+
+    if (
+        onboarding_before or ""
+    ).strip() not in _HOSTED_CHAT_EMAIL_REPLY_STATES and not wants_cancel:
+        return None
+
+    from aurey.cloud.hosted_verification import (
+        HostedVerificationError,
+        confirm_email_verification,
+        purge_pending_hosted_verifications,
+        start_email_verification,
+    )
+    from aurey.cloud.onboarding_refresh import refresh_hosted_user_claim_state
+    from aurey.cloud.platform_client import HostedPlatformApiError, OneClawPlatformClient
+    from aurey.cloud.provision import (
+        HostedProvisioningError,
+        ensure_hosted_telegram_row,
+        ensure_telegram_user_provisioned,
+    )
+
+    def _txn() -> str:
+        plat = OneClawPlatformClient.from_settings(cfg)
+        vault_http = getattr(state.runtime, "oneclaw_evm_signer", None)
+        from aurey.custody.secret_store import OneClawHttpClient
+
+        vf = vault_http if isinstance(vault_http, OneClawHttpClient) else None
+
+        factory_inner = state.hosted_session_factory
+        if factory_inner is None:
+            raise RuntimeError("hosted_session_factory is not configured.")
+        db = factory_inner()
+        try:
+            if wants_cancel:
+                cancel_st = (onboarding_before or "").strip()
+                if cancel_st not in _HOSTED_EMAIL_CANCEL_STATES:
+                    db.rollback()
+                    return (
+                        "Nothing to cancel — you are not in email verification. "
+                        "Use /start for claim help."
+                    )
+                row_cancel = ensure_hosted_telegram_row(
+                    db,
+                    cfg,
+                    telegram_user_id=telegram_user_id,
+                    username=telegram_username,
+                )
+                if row_cancel is None:
+                    db.rollback()
+                    return "Tap /start to begin setup."
+                purge_pending_hosted_verifications(db, row_cancel.id)
+                row_cancel.onboarding_state = "awaiting_email"
+                row_cancel.email = None
+                row_cancel.email_verified_at = None
+                db.commit()
+                return "Canceled — send a new email address or tap /start."
+
+            base_row = ensure_hosted_telegram_row(
+                db,
+                cfg,
+                telegram_user_id=telegram_user_id,
+                username=telegram_username,
+            )
+            if base_row is None:
+                db.rollback()
+                return ""
+
+            onboard = (base_row.onboarding_state or "").strip()
+
+            if onboard == "awaiting_email":
+                if trimmed_lower.startswith("/"):
+                    db.commit()
+                    return (
+                        "<b>Aurey</b>\n"
+                        "Send your <b>real email</b> in one message (not a command). "
+                        "Or tap /start above."
+                    )
+                try:
+                    start_email_verification(db, cfg, base_row, trimmed_raw)
+                except HostedVerificationError as exc:
+                    db.rollback()
+                    return html.escape(str(exc), quote=False)
+                db.commit()
+                return (
+                    "<b>Verification sent</b>\n"
+                    "Open your inbox for a 6-digit code (check spam/junk if it is missing), "
+                    "then reply here with digits only."
+                )
+
+            if onboard == "awaiting_email_verification":
+                try:
+                    confirm_email_verification(db, cfg, base_row, trimmed_raw)
+                except HostedVerificationError as exc:
+                    db.rollback()
+                    return html.escape(str(exc), quote=False)
+                try:
+                    row2, _ = ensure_telegram_user_provisioned(
+                        db,
+                        cfg,
+                        plat,
+                        telegram_user_id=telegram_user_id,
+                        username=telegram_username,
+                        vault_http_client=vf,
+                    )
+                    try:
+                        refresh_hosted_user_claim_state(db, cfg, plat, row2)
+                    except HostedPlatformApiError:
+                        pass
+                except HostedProvisioningError as exc:
+                    db.rollback()
+                    return html.escape(
+                        f"Provisioning failed (configuration): {exc}",
+                        quote=False,
+                    )
+                db.commit()
+                email_hint = ""
+                mail = (row2.email or "").strip()
+                if mail and "@" in mail:
+                    local, _, domain = mail.partition("@")
+                    mask = "***" if len(local) <= 1 else local[0] + "***"
+                    email_hint = f"Check <b>{mask}@{domain}</b> "
+                curl = (row2.claim_url or "").strip()
+                if not curl:
+                    return (
+                        "<b>Provisioning…</b> Your claim invite will arrive by email when ready "
+                        "(check spam/junk). Use /start if nothing arrives after a minute."
+                    )
+                return (
+                    "<b>Almost done</b>\n"
+                    f"{email_hint}for your <b>claim link</b> (check spam/junk if you do not "
+                    "see it).\n\n"
+                    "<b>Claiming</b> means taking ownership of your <b>agent credentials</b> "
+                    "and the <b>Aurey wallet</b> "
+                    "agent. You can do that whenever you like — and you can chat with me now even "
+                    "before you claim.\n\n"
+                    "If the link expires or you need a new one later, send <b>/start</b> and we will "
+                    "email a fresh claim invite."
+                )
+
+            db.rollback()
+            return ""
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    out = await asyncio.to_thread(_txn)
+    if not out.strip():
+        return None
+    return out
 
 
 def _hosted_user_must_finish_claim_message(
@@ -45,7 +319,7 @@ def _hosted_user_must_finish_claim_message(
     *,
     telegram_user_id: int,
 ) -> str | None:
-    """Return reply text when the user is still awaiting claim (after a refresh attempt).
+    """Return reply text when onboarding blocks normal agent invokes.
 
     ``None`` means normal agent invoke should proceed.
     """
@@ -59,11 +333,35 @@ def _hosted_user_must_finish_claim_message(
     if factory is None:
         return None
 
+    from sqlalchemy import select
+
+    from aurey.cloud.models import HostedPlatformUserORM
     from aurey.cloud.onboarding_refresh import refresh_hosted_user_claim_state
     from aurey.cloud.platform_client import HostedPlatformApiError, OneClawPlatformClient
 
     db = factory()
     try:
+        row_preview = db.scalar(
+            select(HostedPlatformUserORM).where(
+                HostedPlatformUserORM.telegram_user_id == telegram_user_id,
+            ),
+        )
+        onboard_pre = (
+            (row_preview.onboarding_state or "").strip() if row_preview is not None else None
+        )
+
+        if row_preview is None and cfg.hosted_require_verified_email:
+            db.rollback()
+            return "Tap /start in this chat to begin Aurey onboarding."
+
+        if (
+            onboard_pre is not None
+            and onboard_pre in _HOSTED_AGENT_BLOCK_EMAIL_STATES
+            and cfg.hosted_require_verified_email
+        ):
+            db.commit()
+            return _hosted_blocked_email_prompt_message(onboard_pre)
+
         platform = OneClawPlatformClient.from_settings(cfg)
         row = refresh_hosted_user_claim_state(db, cfg, platform, telegram_user_id)
         db.commit()
@@ -82,6 +380,12 @@ def _hosted_user_must_finish_claim_message(
     if row is None:
         return None
     if (row.onboarding_state or "").strip() == "awaiting_claim":
+        if _hosted_inbox_verified(row):
+            return None
+        if cfg.hosted_require_verified_email:
+            return (
+                "Verify your email first — reply with your inbox, then the 6-digit code we send."
+            )
         return _hosted_finish_claim_short_message()
     return None
 
@@ -89,6 +393,86 @@ def _hosted_user_must_finish_claim_message(
 _TELEGRAM_MAX_MESSAGE_CHARS = 4096
 _TELEGRAM_CHUNK_TARGET_CHARS = 3600
 _TELEGRAM_TYPING_REFRESH_SEC = 4.0
+
+
+def _telegram_begin_typing_pump(
+    bot: Any,
+    chat_id: int,
+) -> tuple[asyncio.Event, asyncio.Task[None]]:
+    """Start a background task that keeps Telegram ``typing`` active until ended."""
+
+    from telegram.constants import ChatAction
+
+    typing_done = asyncio.Event()
+
+    async def pump() -> None:
+        while not typing_done.is_set():
+            try:
+                await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            except Exception:
+                pass
+            if typing_done.is_set():
+                break
+            try:
+                await asyncio.wait_for(typing_done.wait(), timeout=_TELEGRAM_TYPING_REFRESH_SEC)
+            except TimeoutError:
+                pass
+
+    return typing_done, asyncio.create_task(pump())
+
+
+async def _telegram_end_typing_pump(
+    typing_done: asyncio.Event,
+    typing_task: asyncio.Task[None],
+) -> None:
+    typing_done.set()
+    await typing_task
+
+
+def _telegram_bot_command_menu(*, hosted_email_onboarding: bool) -> list[Any]:
+    """Menu entries for Telegram ``setMyCommands`` (BotCommand objects)."""
+
+    from telegram import BotCommand
+
+    cmds = [
+        BotCommand("start", "Set up or refresh your Aurey / Claim credentials and wallet"),
+        BotCommand("help", "Show available commands"),
+    ]
+    if hosted_email_onboarding:
+        cmds.append(
+            BotCommand("cancel", "Cancel in-progress email verification and start over"),
+        )
+    return cmds
+
+
+def _telegram_help_message_html(*, hosted_email_onboarding: bool) -> str:
+    lines = [
+        "<b>Aurey commands</b>",
+        "",
+        "<b>/start</b> — Begin setup, check onboarding status, or request a "
+        "fresh credentials and wallet claim link by email (if yours expired).",
+        "<b>/help</b> — Show this list.",
+    ]
+    if hosted_email_onboarding:
+        lines.extend(
+            [
+                "<b>/cancel</b> — Abort the current email verification step and enter a new "
+                "address.",
+                "",
+                "During setup, send your <b>real email</b> and then the <b>6-digit code</b> "
+                "as normal messages (not commands).",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Any other text invokes the Aurey agent (balances, swaps, Earn, and more) once "
+            "your inbox is verified.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 _TELEGRAM_STATUS_EDIT_THROTTLE_SEC = 1.25
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
@@ -395,6 +779,21 @@ def hosted_invoke_bundle_for_telegram_user(
         )
         if row is None:
             return None, extras
+        if not (row.wallet_address or "").strip() and (row.user_agent_id or "").strip():
+            from aurey.cloud.platform_client import OneClawPlatformClient
+            from aurey.cloud.wallet_sync import maybe_backfill_wallet_from_signing_keys
+
+            try:
+                plat = OneClawPlatformClient.from_settings(cfg)
+                maybe_backfill_wallet_from_signing_keys(
+                    db,
+                    plat,
+                    row,
+                    reason="telegram_invoke",
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
         wa_raw = (row.wallet_address or "").strip()
         if wa_raw:
             try:
@@ -458,6 +857,10 @@ def handle_telegram_text(
         telegram_user_id=user_id,
     )
     context.update(hosted_ctx)
+    if hosted_ctx.get("hosted_wallet_address"):
+        from aurey.service.invoke import HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY
+
+        context[HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY] = True
     extras = [TelegramInvokeProgressCallback(progress_sink)] if progress_sink is not None else None
     result = invoke_deep_agent_turn(
         state,
@@ -525,8 +928,8 @@ def build_telegram_application(
                 OneClawPlatformClient,
             )
             from aurey.cloud.provision import (
+                HostedAwaitingEmailFlow,
                 HostedProvisioningError,
-                ensure_telegram_user_provisioned,
             )
             from aurey.custody.secret_store import OneClawHttpClient
 
@@ -538,7 +941,7 @@ def build_telegram_application(
             telegram_user_id = int(tid_raw)
             telegram_username = getattr(tg_user, "username", None)
 
-            def _provision_sync() -> tuple[str, str]:
+            def _provision_sync() -> tuple[str | None, str]:
                 factory = state.hosted_session_factory
                 if factory is None:
                     raise RuntimeError("hosted_session_factory is not configured.")
@@ -550,6 +953,38 @@ def build_telegram_application(
                         if isinstance(state.runtime.oneclaw_evm_signer, OneClawHttpClient)
                         else None
                     )
+                    from sqlalchemy import select
+
+                    from aurey.cloud.models import HostedPlatformUserORM
+                    from aurey.cloud.provision import (
+                        ensure_hosted_telegram_row,
+                        ensure_telegram_user_provisioned,
+                    )
+
+                    ensure_hosted_telegram_row(
+                        db,
+                        cfg,
+                        telegram_user_id=telegram_user_id,
+                        username=telegram_username,
+                    )
+                    row_snapshot = db.scalar(
+                        select(HostedPlatformUserORM).where(
+                            HostedPlatformUserORM.telegram_user_id == telegram_user_id,
+                        ),
+                    )
+                    onboarding_snapshot = (
+                        (row_snapshot.onboarding_state or "").strip()
+                        if row_snapshot is not None
+                        else ""
+                    )
+
+                    if cfg.hosted_require_verified_email and onboarding_snapshot in (
+                        "awaiting_email",
+                        "awaiting_email_verification",
+                    ):
+                        db.commit()
+                        return None, onboarding_snapshot
+
                     row, _ = ensure_telegram_user_provisioned(
                         db,
                         cfg,
@@ -566,29 +1001,47 @@ def build_telegram_application(
                             exc_info=False,
                         )
                     db.commit()
-                    return row.claim_url, (row.onboarding_state or "").strip()
+                    cu = (row.claim_url or "").strip()
+                    return (cu or None), (row.onboarding_state or "").strip()
                 except Exception:
                     db.rollback()
                     raise
                 finally:
                     db.close()
 
+            typing_done: asyncio.Event | None = None
+            typing_task: asyncio.Task[None] | None = None
+            if cid_opt is not None:
+                typing_done, typing_task = _telegram_begin_typing_pump(context.bot, cid_opt)
             try:
                 claim_url, onboard = await asyncio.to_thread(_provision_sync)
+            except HostedAwaitingEmailFlow:
+                await msg.reply_text(
+                    "<b>Aurey</b>\n"
+                    "Reply here with your <b>real email</b>. We send a verification code "
+                    "(from fabri@agentic-pantheon.com) — check spam/junk if it does not arrive, "
+                    "then paste the digits here.",
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+                return
             except HostedProvisioningError as exc:
-                await msg.reply_text(f"Hosted setup failed (configuration): {exc}")
+                await msg.reply_text(f"setup failed (configuration): {exc}")
                 return
             except HostedPlatformApiError as exc:
-                await msg.reply_text(f"Hosted setup failed (platform): {exc}")
+                await msg.reply_text(f"setup failed (platform): {exc}")
                 return
             except Exception:
                 gate_log.exception("Telegram hosted provisioning failed")
-                await msg.reply_text("Hosted setup failed; see service logs for details.")
+                await msg.reply_text("setup failed; see service logs for details.")
                 return
+            finally:
+                if typing_done is not None and typing_task is not None:
+                    await _telegram_end_typing_pump(typing_done, typing_task)
 
             if onboard == "ready":
                 lines = [
-                    "<b>Hosted Aurey</b>",
+                    "<b>Aurey</b>",
                     "You're all set — send a message to invoke the agent.",
                 ]
                 cu = (claim_url or "").strip()
@@ -606,14 +1059,68 @@ def build_telegram_application(
                 )
                 return
 
-            safe_url = html.escape(claim_url.strip(), quote=False)
-            text = (
-                "<b>Hosted Aurey</b>\n"
-                "Your claim link is ready. Open it to finish setup:\n\n"
-                f"{safe_url}\n\n"
-                "After claiming, send messages here as usual."
+            if onboard == "awaiting_email":
+                await msg.reply_text(
+                    "<b>Aurey</b>\n"
+                    "Reply here with your <b>real email</b>. We send a verification code "
+                    "(from fabri@agentic-pantheon.com) — check spam/junk if it does not arrive, "
+                    "then paste the digits here.",
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+                return
+
+            if onboard == "awaiting_email_verification":
+                await msg.reply_text(
+                    "<b>Aurey</b>\n"
+                    "Check your inbox for the 6-digit code (and spam/junk if needed), then reply "
+                    "with digits only. Send /cancel to begin again.",
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+                return
+
+            cu_eff = (claim_url or "").strip()
+            if onboard == "awaiting_claim":
+                if cfg.hosted_require_verified_email:
+                    await msg.reply_text(
+                        "<b>Aurey</b>\n"
+                        "A fresh claim invite was emailed (check spam/junk). "
+                        "<b>Claiming</b> secures your <b>agent credentials</b> and <b>wallet</b> on "
+                        "1Claw claim page — you can do that anytime. "
+                        "Send <b>/start</b> if you need another email.",
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                    return
+                if not cu_eff:
+                    await msg.reply_text(
+                        "setup still preparing — try /start again in a moment.",
+                    )
+                    return
+                safe_url = html.escape(cu_eff, quote=False)
+                text_lc = (
+                    "<b>Aurey</b>\n"
+                    "Your claim link is ready. <b>Claiming</b> means securing your "
+                    "<b>wallet and agent credentials on 1Claw</b>  on that page:\n\n"
+                    f"{safe_url}\n\n"
+                    "After claiming, send messages here as usual."
+                )
+                await msg.reply_text(text_lc, parse_mode="HTML", disable_web_page_preview=True)
+                return
+
+            if onboard == "email_verified":
+                await msg.reply_text(
+                    "<b>Aurey</b> — finishing provisioning… tap /start again in a moment.",
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+                return
+
+            await msg.reply_text(
+                f"Aurey onboarding state ({onboard!r}) — try /start again.",
+                parse_mode=None,
             )
-            await msg.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
             return
 
         await msg.reply_text("Aurey is ready. Send a message to invoke the agent.")
@@ -631,7 +1138,24 @@ def build_telegram_application(
             return
         chat_id_for_session = chat_id_raw if chat_id_raw is not None else "unknown"
 
-        tid_for_gate = getattr(user, "id", None)
+        uid_msg = getattr(user, "id", None)
+        hcfg = state.settings
+        if (
+            uid_msg is not None
+            and hcfg.hosted_platform_enabled
+            and (hcfg.database_url or "").strip()
+        ):
+            hosted_quick = await hosted_handle_optional_email_onboarding_chat(
+                state=state,
+                telegram_user_id=int(uid_msg),
+                telegram_username=getattr(user, "username", None),
+                text=msg.text,
+            )
+            if hosted_quick:
+                await msg.reply_text(hosted_quick, parse_mode="HTML", disable_web_page_preview=True)
+                return
+
+        tid_for_gate = uid_msg
         if tid_for_gate is not None:
             block = await asyncio.to_thread(
                 _hosted_user_must_finish_claim_message,
@@ -660,29 +1184,9 @@ def build_telegram_application(
             return
 
         chat_id_int = int(chat_id_raw)
-        from telegram.constants import ChatAction
         from telegram.error import BadRequest
 
-        typing_done = asyncio.Event()
-
-        async def pump_typing() -> None:
-            """Refresh ``typing``; Telegram clears it after a few seconds."""
-            while not typing_done.is_set():
-                try:
-                    await context.bot.send_chat_action(
-                        chat_id=chat_id_int,
-                        action=ChatAction.TYPING,
-                    )
-                except Exception:
-                    pass
-                if typing_done.is_set():
-                    break
-                try:
-                    await asyncio.wait_for(typing_done.wait(), timeout=_TELEGRAM_TYPING_REFRESH_SEC)
-                except TimeoutError:
-                    pass
-
-        typing_task = asyncio.create_task(pump_typing())
+        typing_done, typing_task = _telegram_begin_typing_pump(context.bot, chat_id_int)
 
         reply = ""
         try:
@@ -746,8 +1250,7 @@ def build_telegram_application(
                 pass
             await flush_progress(force=True)
         finally:
-            typing_done.set()
-            await typing_task
+            await _telegram_end_typing_pump(typing_done, typing_task)
 
         chunks = telegram_message_chunks(reply)
         for idx, raw_chunk in enumerate(chunks):
@@ -770,8 +1273,81 @@ def build_telegram_application(
                 disable_web_page_preview=True,
             )
 
-    app = Application.builder().token(bot_token).build()
+    async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        _ = context
+        chat = update.effective_chat
+        chat_id_raw = getattr(chat, "id", None)
+        cid_opt = int(chat_id_raw) if chat_id_raw is not None else None
+        if not _telegram_chat_is_allowed(cid_opt, allowed_chats):
+            return
+        msg = update.effective_message
+        if msg is None:
+            return
+        cfg = state.settings
+        hosted_email = bool(
+            cfg.hosted_platform_enabled
+            and (cfg.database_url or "").strip()
+            and cfg.hosted_require_verified_email
+        )
+        await msg.reply_text(
+            _telegram_help_message_html(hosted_email_onboarding=hosted_email),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def cancel_hosted(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Clear pending Hosted email verification (COMMAND handler so /cancel is not swallowed)."""
+
+        _ = context
+        chat = update.effective_chat
+        chat_id_raw = getattr(chat, "id", None)
+        cid_opt = int(chat_id_raw) if chat_id_raw is not None else None
+        if not _telegram_chat_is_allowed(cid_opt, allowed_chats):
+            return
+        msg = update.effective_message
+        if msg is None:
+            return
+        user = update.effective_user
+        uid_raw = getattr(user, "id", None)
+        if uid_raw is None:
+            await msg.reply_text("Could not read your Telegram user id.")
+            return
+        sts = state.settings
+        if not sts.hosted_platform_enabled or not (sts.database_url or "").strip():
+            await msg.reply_text("Hosted email verification is inactive here.")
+            return
+        txt = await hosted_handle_optional_email_onboarding_chat(
+            state=state,
+            telegram_user_id=int(uid_raw),
+            telegram_username=getattr(user, "username", None),
+            text="/cancel",
+        )
+        if txt:
+            await msg.reply_text(txt, parse_mode="HTML", disable_web_page_preview=True)
+
+    hosted_email_onboarding = bool(
+        state.settings.hosted_platform_enabled
+        and (state.settings.database_url or "").strip()
+        and state.settings.hosted_require_verified_email
+    )
+
+    async def _register_bot_commands(application: Application) -> None:
+        try:
+            await application.bot.set_my_commands(
+                _telegram_bot_command_menu(hosted_email_onboarding=hosted_email_onboarding),
+            )
+        except Exception:
+            gate_log.warning("Could not register Telegram bot commands menu", exc_info=True)
+
+    app = (
+        Application.builder()
+        .token(bot_token)
+        .post_init(_register_bot_commands)
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("cancel", cancel_hosted))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
 
     _telegram_log = logging.getLogger("aurey.telegram.bot")

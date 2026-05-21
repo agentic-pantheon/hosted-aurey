@@ -1,4 +1,4 @@
-# Hosted Aurey — 1Claw Platform runbook
+# Aurey — 1Claw Platform runbook
 
 Operators use the [1Claw Platform API](https://docs.1claw.xyz) to register apps, templates, and agent policies before pointing hosted Aurey at those resources via `AUREY_*` settings (see `src/aurey/settings/` and `.env.example`).
 
@@ -11,6 +11,14 @@ Operators use the [1Claw Platform API](https://docs.1claw.xyz) to register apps,
 Never commit `plt_` keys; use secrets managers or deployment env config only.
 
 When a hosted user’s claim link expires, Aurey calls **`POST /v1/platform/connections/{connection_id}/reissue-claim`** on `/start` (after claim-state poll) for bootstrapped connections still in `awaiting_claim`. Optional env: **`AUREY_PLATFORM_CLAIM_RETURN_TO`** for the JSON `return_to` field.
+
+## 1b. Telegram verified email + SMTP (default)
+
+By default (**`AUREY_HOSTED_REQUIRE_VERIFIED_EMAIL=true`**, see [`.env.example`](../.env.example)) new Telegram users stay in **`awaiting_email`** until they verify a real inbox: Aurey emails a 6-digit code, then **provision** uses that address for **`POST /v1/platform/users/upsert`**. Claim links are mailed from **`AUREY_HOSTED_EMAIL_FROM`** (default **`fabri@agentic-pantheon.com`**) when SMTP is configured (`AUREY_HOSTED_SMTP_*`). Throttle between claim emails: **`AUREY_HOSTED_CLAIM_EMAIL_THROTTLE_SECONDS`**. Onboarding states: `awaiting_email` → `awaiting_email_verification` → `email_verified` → `awaiting_claim` → `ready`. **Telegram agent chat** is allowed once the inbox is verified (`email_verified_at` set); **1Claw claim** (password / credentials on the claim page) can be completed later while the user is in `awaiting_claim`.
+
+Verification and claim messages use branded HTML (purple/gold layout, inline Aurey medal header via `cid:`, footer links to **https://aurey.agentic-pantheon.com** and **@aurey_ai** on X). Asset: `src/aurey/cloud/email_assets/aurey-header.jpg`.
+
+Set **`AUREY_HOSTED_REQUIRE_VERIFIED_EMAIL=false`** only to keep the legacy synthetic `tg_<id>@domain` upsert without inbox verification (tests and old scripts use this).
 
 ## 2. Define a provisioning template (sketch)
 
@@ -31,7 +39,7 @@ Use **`AUREY_LLM_PROXY=direct`** with **`OPENAI_API_KEY`** only for local bypass
 
 ## 3. Operator 1Claw API key (`AUREY_ONECLAW_BOOTSTRAP_API_KEY`)
 
-Hosted Aurey still boots a **`OneClawHttpClient`** for vault access (fallback when env keys are not set) and for signing helpers. Configure:
+Aurey still boots a **`OneClawHttpClient`** for vault access (fallback when env keys are not set) and for signing helpers. Configure:
 
 - **`AUREY_ONECLAW_VAULT_ID`** — dashboard vault used for path-based reads.
 - **`AUREY_ONECLAW_BOOTSTRAP_API_KEY`** — your operator / deployment API key (**not** the Platform `plt_` key).

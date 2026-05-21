@@ -106,6 +106,41 @@ def test_invoke_prepends_system_message_when_hosted_wallet_bound() -> None:
     assert chk in msgs[0].content
 
 
+def test_invoke_uses_server_hosted_wallet_before_ready() -> None:
+    payloads: list[object] = []
+
+    def capture_invoke(payload, config=None):
+        _ = config
+        payloads.append(payload)
+        return {"messages": []}
+
+    svc = MagicMock(spec=AureyServiceState)
+    svc.settings = AureySettings(hosted_platform_enabled=True)
+    svc.default_model = "openai:gpt-4o-mini"
+    graph = MagicMock()
+    graph.invoke.side_effect = capture_invoke
+    svc.get_or_create_graph.return_value = graph
+
+    from aurey.service.invoke import HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY
+
+    raw = "0xcccccccccccccccccccccccccccccccccccccccc"
+    chk = to_checksum_evm_address(raw)
+    out = invoke_deep_agent_turn(
+        svc,
+        message="what is my wallet",
+        session_id="t:pre-ready",
+        context={
+            "hosted_wallet_address": raw,
+            HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY: True,
+        },
+        hosted_signing_context=None,
+    )
+    assert out.ok is True
+    msgs = payloads[0]["messages"]
+    assert isinstance(msgs[0], SystemMessage)
+    assert chk in msgs[0].content
+
+
 def test_invoke_ignores_client_hosted_wallet_when_hosted_platform_enabled() -> None:
     from aurey.cloud.signing_context import HostedSigningContext, hosted_signing_context_scope
 

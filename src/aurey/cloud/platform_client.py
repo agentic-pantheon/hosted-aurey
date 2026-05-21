@@ -339,13 +339,13 @@ class OneClawPlatformClient:
             "Platform app users response must be a JSON object or array.",
         )
 
-    def upsert_user_synthetic_email(
+    def upsert_user_by_email(
         self,
         *,
         email: str,
         display_name: str | None,
     ) -> PlatformUpsertResult:
-        """Ensure a synthetic user exists; parse ``connection_id`` (top-level or under ``data``)."""
+        """Provision user via ``POST /v1/platform/users/upsert`` (email upsert identity)."""
 
         body: dict[str, Any] = {"email": email}
         if display_name is not None:
@@ -357,6 +357,16 @@ class OneClawPlatformClient:
                 "Upsert response missing connection_id (top-level or data)."
             )
         return PlatformUpsertResult(connection_id=cid)
+
+    def upsert_user_synthetic_email(
+        self,
+        *,
+        email: str,
+        display_name: str | None,
+    ) -> PlatformUpsertResult:
+        """Backward-compatible alias for :meth:`upsert_user_by_email`."""
+
+        return self.upsert_user_by_email(email=email, display_name=display_name)
 
     def bootstrap(self, connection_id: str, template_id: str) -> PlatformBootstrapResult:
         """Bootstrap a connection; returns ``claim_url`` and optional vault / agent ids."""

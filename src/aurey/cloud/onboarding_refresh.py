@@ -130,14 +130,22 @@ def refresh_hosted_user_claim_state(
 
     if _is_fully_ready_row(row):
         _try_signing_keys_wallet_backfill(
-            session, settings, platform_client, row, reason="ready_short_circuit",
+            session,
+            settings,
+            platform_client,
+            row,
+            reason="ready_short_circuit",
         )
         return row
 
     state = (row.onboarding_state or "").strip()
     if state != "awaiting_claim":
         _try_signing_keys_wallet_backfill(
-            session, settings, platform_client, row, reason="non_awaiting_state",
+            session,
+            settings,
+            platform_client,
+            row,
+            reason="non_awaiting_state",
         )
         return row
 
@@ -183,7 +191,11 @@ def refresh_hosted_user_claim_state(
             )
             if list_payload is None:
                 _try_signing_keys_wallet_backfill(
-                    session, settings, platform_client, row, reason="connection_404",
+                    session,
+                    settings,
+                    platform_client,
+                    row,
+                    reason="connection_404",
                 )
                 return row
         else:
@@ -192,7 +204,11 @@ def refresh_hosted_user_claim_state(
     payload = _merge_poll_payloads(list_payload, conn_payload)
     if payload is None:
         _try_signing_keys_wallet_backfill(
-            session, settings, platform_client, row, reason="connection_404",
+            session,
+            settings,
+            platform_client,
+            row,
+            reason="connection_404",
         )
         return row
 
@@ -200,7 +216,11 @@ def refresh_hosted_user_claim_state(
 
     session.flush()
     _try_signing_keys_wallet_backfill(
-        session, settings, platform_client, row, reason="post_claim_poll",
+        session,
+        settings,
+        platform_client,
+        row,
+        reason="post_claim_poll",
     )
     return row
 

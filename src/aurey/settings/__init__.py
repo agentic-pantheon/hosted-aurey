@@ -155,9 +155,56 @@ class AureySettings(BaseSettings):
     hosted_synthetic_email_domain: str = Field(
         default="hosted-aurey.local",
         description=(
-            "Synthetic email domain for Platform user upserts (e.g. ``tg_123@<domain>``). "
-            "Whitespace is stripped; leading/trailing dots removed."
+            "Legacy synthetic domain for Platform upserts (``tg_123@<domain>``) when "
+            "``hosted_require_verified_email`` is false. Verified onboarding uses the real inbox."
         ),
+    )
+    hosted_require_verified_email: bool = Field(
+        default=True,
+        description=(
+            "When hosted platform provisioning is enabled, Telegram users must verify a real "
+            "email before Platform ``users/upsert``. Set False to keep legacy synthetic-email flow."
+        ),
+    )
+    hosted_email_from: str = Field(
+        default="fabri@agentic-pantheon.com",
+        description=(
+            "RFC5322 From address for hosted verification and claim emails "
+            "(e.g. ``fabri@agentic-pantheon.com``)."
+        ),
+    )
+    hosted_smtp_host: str = Field(
+        default="",
+        description="SMTP hostname for hosted onboarding mail; empty skips sending (verification fails closed when required).",
+    )
+    hosted_smtp_port: int = Field(default=587, ge=1, le=65535)
+    hosted_smtp_user: str = Field(
+        default="", description="SMTP auth username when required by the relay."
+    )
+    hosted_smtp_password: str = Field(
+        default="",
+        description="SMTP auth password via ``AUREY_HOSTED_SMTP_PASSWORD``.",
+    )
+    hosted_smtp_use_tls: Literal["starttls", "ssl", "plain"] = Field(
+        default="starttls",
+        description=(
+            "``starttls`` (port 587 typical), ``ssl`` (SMTP_SSL), or ``plain`` (not recommended)."
+        ),
+    )
+    hosted_email_verification_ttl_seconds: int = Field(default=900, ge=60, le=86400)
+    hosted_email_code_pepper: str = Field(
+        default="",
+        description=(
+            "Secret concatenated server-side before hashing hosted email OTPs; "
+            "required when sending verification emails."
+        ),
+    )
+    hosted_email_verification_max_attempts: int = Field(default=5, ge=1, le=20)
+    hosted_claim_email_throttle_seconds: int = Field(
+        default=120,
+        ge=30,
+        le=86400,
+        description="Minimum seconds between outbound claim emails for the same user.",
     )
     hosted_http_admin_token: str | None = Field(
         default=None,
@@ -380,6 +427,28 @@ class AureySettings(BaseSettings):
         s = (v or "").strip().strip("/")
         return s if s else "hosted/agents"
 
+    @field_validator("hosted_email_from")
+    @classmethod
+    def _hosted_email_from_non_empty(cls, v: str) -> str:
+        s = (v or "").strip()
+        if not s:
+            raise ValueError("hosted_email_from must not be empty.")
+        return s
+
+    @field_validator("hosted_smtp_host", "hosted_smtp_user")
+    @classmethod
+    def _hosted_smtp_host_user_strip(cls, v: object) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+    @field_validator("hosted_smtp_password", mode="before")
+    @classmethod
+    def _hosted_smtp_password_strip(cls, v: object) -> str:
+        if v is None:
+            return ""
+        return str(v)
+
     @field_validator("oneclaw_human_api_token", "hosted_secrets_master_key", mode="before")
     @classmethod
     def _strip_optional_hosted_crypto(cls, v: object) -> str | None:
@@ -427,6 +496,14 @@ class AureySettings(BaseSettings):
         if not value:
             raise ValueError(f"Environment variable {name!r} is set but empty.")
         return value
+
+    def hosted_email_smtp_configured(self) -> bool:
+        """True when ``hosted_smtp_host`` is non-empty (outbound SMTP may proceed)."""
+
+        return bool(self.hosted_smtp_host.strip())
+
+    def hosted_email_hmac_pepper_present(self) -> bool:
+        return bool(self.hosted_email_code_pepper.strip())
 
     def resolve_delegated_actor_api_key(self) -> str:
         """Actor token for ``POST /v1/auth/delegated-token`` when using hosted intents.

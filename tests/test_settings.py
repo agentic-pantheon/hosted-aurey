@@ -48,6 +48,14 @@ def test_settings_defaults():
     assert s.hosted_oidc_audience is None
     assert s.hosted_oidc_subject_token_ttl_seconds == 300
     assert s.hosted_http_admin_token is None
+    assert s.hosted_require_verified_email is True
+    assert s.hosted_email_from == "fabri@agentic-pantheon.com"
+    assert s.hosted_smtp_host == ""
+    assert s.hosted_smtp_port == 587
+    assert s.hosted_smtp_use_tls == "starttls"
+    assert s.hosted_email_verification_ttl_seconds == 900
+    assert s.hosted_email_code_pepper == ""
+    assert s.hosted_claim_email_throttle_seconds == 120
 
 
 def test_settings_env_override(monkeypatch):
