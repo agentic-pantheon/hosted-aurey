@@ -9,7 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from aurey.cloud.hosted_credentials import HostedVaultHttpPort, persist_hosted_agent_ocv_credentials
-from aurey.cloud.hosted_email import HostedEmailError, send_claim_invite_email
+from aurey.cloud.hosted_email import (
+    HostedEmailError,
+    send_claim_invite_email,
+    send_operator_new_registration_email,
+)
 from aurey.cloud.models import HostedPlatformUserORM
 from aurey.cloud.onboarding_refresh import refresh_hosted_user_claim_state
 from aurey.cloud.platform_client import (
@@ -17,6 +21,7 @@ from aurey.cloud.platform_client import (
     OneClawPlatformClient,
     PlatformBootstrapResult,
     PlatformReissueClaimResult,
+    list_signing_key_address_lines_from_payload,
 )
 from aurey.cloud.wallet_sync import maybe_backfill_wallet_from_signing_keys
 from aurey.settings import AureySettings
@@ -97,6 +102,92 @@ def hosted_maybe_mail_claim_invite(
 
     row.last_claim_email_sent_at = now
     session.flush()
+
+
+def _telegram_handle_for_row(row: HostedPlatformUserORM) -> str:
+    un = (row.telegram_username or "").strip()
+    if un:
+        return f"@{un.lstrip('@')}"
+    return f"id:{row.telegram_user_id}"
+
+
+def _wallet_address_lines_for_operator_notify(
+    *,
+    platform: OneClawPlatformClient | None,
+    row: HostedPlatformUserORM,
+    boot: PlatformBootstrapResult,
+) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+
+    def _add(line: str) -> None:
+        if line not in seen:
+            seen.add(line)
+            lines.append(line)
+
+    aid = (row.user_agent_id or boot.user_agent_id or "").strip()
+    if platform is not None and aid:
+        try:
+            payload = platform.get_agent_signing_keys(aid)
+            for line in list_signing_key_address_lines_from_payload(payload):
+                _add(line)
+        except HostedPlatformApiError as exc:
+            _log.debug(
+                "Operator notify: signing-keys unavailable agent_id=%s: %s",
+                aid,
+                exc,
+            )
+
+    wa = (row.wallet_address or boot.wallet_address or "").strip()
+    if wa:
+        _add(f"ethereum: {wa}")
+
+    return lines
+
+
+def hosted_maybe_notify_operator_new_registration(
+    settings: AureySettings,
+    *,
+    platform: OneClawPlatformClient | None,
+    row: HostedPlatformUserORM,
+    boot: PlatformBootstrapResult,
+    contact_email: str,
+) -> None:
+    """Email the operator when Platform bootstrap completes (/start flow, before claim)."""
+
+    dest = settings.hosted_operator_registration_notify_email
+    if dest is None or not str(dest).strip():
+        return
+    if (row.onboarding_state or "").strip() != "awaiting_claim":
+        return
+
+    user_email = (contact_email or row.email or "").strip()
+    if not user_email:
+        user_email = synthetic_email_for_telegram_user(
+            telegram_user_id=row.telegram_user_id,
+            hosted_synthetic_email_domain=settings.hosted_synthetic_email_domain,
+        )
+
+    wallet_lines = _wallet_address_lines_for_operator_notify(
+        platform=platform,
+        row=row,
+        boot=boot,
+    )
+    try:
+        send_operator_new_registration_email(
+            settings,
+            to_email=str(dest).strip(),
+            user_email=user_email,
+            telegram_handle=_telegram_handle_for_row(row),
+            wallet_address_lines=wallet_lines,
+            telegram_user_id=row.telegram_user_id,
+        )
+    except HostedEmailError as exc:
+        _log.warning(
+            "Could not deliver operator registration email telegram_user_id=%s: %s",
+            row.telegram_user_id,
+            exc,
+        )
 
 
 def effective_platform_contact_email(
@@ -519,6 +610,13 @@ def ensure_telegram_user_provisioned(
     session.flush()
 
     hosted_maybe_mail_claim_invite(settings, session, row, prev_claim_url=claim_before_refresh)
+    hosted_maybe_notify_operator_new_registration(
+        settings,
+        platform=platform,
+        row=row,
+        boot=boot,
+        contact_email=upsert_identity_email,
+    )
     session.flush()
     return row, created_or_refreshed
 
@@ -532,5 +630,6 @@ __all__ = [
     "ensure_hosted_telegram_row",
     "ensure_telegram_user_provisioned",
     "hosted_maybe_mail_claim_invite",
+    "hosted_maybe_notify_operator_new_registration",
     "synthetic_email_for_telegram_user",
 ]

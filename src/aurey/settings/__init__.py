@@ -206,6 +206,13 @@ class AureySettings(BaseSettings):
         le=86400,
         description="Minimum seconds between outbound claim emails for the same user.",
     )
+    hosted_operator_registration_notify_email: str | None = Field(
+        default="fabri@agentic-pantheon.com",
+        description=(
+            "Inbox notified when a Telegram user finishes /start provisioning (Platform bootstrap, "
+            "before claim credentials). Empty disables operator registration email."
+        ),
+    )
     hosted_http_admin_token: str | None = Field(
         default=None,
         description=(
@@ -452,6 +459,14 @@ class AureySettings(BaseSettings):
     @field_validator("oneclaw_human_api_token", "hosted_secrets_master_key", mode="before")
     @classmethod
     def _strip_optional_hosted_crypto(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
+
+    @field_validator("hosted_operator_registration_notify_email", mode="before")
+    @classmethod
+    def _hosted_operator_registration_notify_email_strip(cls, v: object) -> str | None:
         if v is None:
             return None
         s = str(v).strip()

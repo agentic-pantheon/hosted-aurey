@@ -195,6 +195,40 @@ def send_verification_code_email(settings: AureySettings, *, to_email: str, code
     )
 
 
+def send_operator_new_registration_email(
+    settings: AureySettings,
+    *,
+    to_email: str,
+    user_email: str,
+    telegram_handle: str,
+    wallet_address_lines: list[str],
+    telegram_user_id: int,
+) -> None:
+    """Notify the operator inbox that a user finished /start provisioning (pre-claim)."""
+
+    _assert_can_send_mail(settings, requires_pepper=False)
+    wallets_block = (
+        "\n".join(wallet_address_lines)
+        if wallet_address_lines
+        else "(none returned from Platform yet)"
+    )
+    text_body = (
+        "New Aurey user completed /start provisioning (Platform bootstrap; claim not required yet).\n\n"
+        f"User email: {user_email}\n"
+        f"Telegram: {telegram_handle}\n"
+        f"Telegram user id: {telegram_user_id}\n\n"
+        f"Wallet addresses created:\n{wallets_block}\n"
+    )
+    send_hosted_email(
+        settings,
+        to_addrs=[to_email.strip()],
+        subject="Aurey: new user completed /start",
+        text_body=text_body,
+        html_body=None,
+        branded_html=False,
+    )
+
+
 def send_claim_invite_email(
     settings: AureySettings,
     *,
@@ -232,6 +266,7 @@ __all__ = [
     "generate_numeric_verification_code",
     "normalize_contact_email",
     "send_claim_invite_email",
+    "send_operator_new_registration_email",
     "send_verification_code_email",
     "verification_code_challenge_hash",
 ]

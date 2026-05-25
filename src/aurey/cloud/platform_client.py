@@ -112,6 +112,53 @@ def _chain_label_ethereum(chain: Any) -> bool:
     return False
 
 
+def _format_signing_key_address_line(item: Mapping[str, Any]) -> str | None:
+    chain = item.get("chain") or item.get("chain_slug") or item.get("chainSlug")
+    chain_label = str(chain).strip() if chain else "unknown"
+    raw = item.get("address") or item.get("evm_address")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    addr_raw = raw.strip()
+    addr_out = addr_raw
+    if addr_raw.startswith("0x"):
+        try:
+            addr_out = to_checksum_evm_address(addr_raw)
+        except ValueError:
+            addr_out = addr_raw
+    return f"{chain_label}: {addr_out}"
+
+
+def list_signing_key_address_lines_from_items(items: Any) -> list[str]:
+    """Human-readable ``chain: address`` lines for every signing-key entry."""
+
+    if not isinstance(items, list):
+        return []
+    lines: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        line = _format_signing_key_address_line(item)
+        if line is None or line in seen:
+            continue
+        seen.add(line)
+        lines.append(line)
+    return lines
+
+
+def list_signing_key_address_lines_from_payload(payload: Any) -> list[str]:
+    """Collect signing-key address lines from bootstrap JSON or signing-keys GET bodies."""
+
+    for lst in _signing_keys_list_candidates(payload):
+        lines = list_signing_key_address_lines_from_items(lst)
+        if lines:
+            return lines
+    arr = extract_signing_keys_array_from_api(payload)
+    if arr is not None:
+        return list_signing_key_address_lines_from_items(arr)
+    return []
+
+
 def extract_ethereum_address_from_signing_key_items(items: Any) -> str | None:
     """First checksummed ``0x`` address from signing-key entries where ``chain`` is Ethereum.
 
@@ -481,4 +528,6 @@ __all__ = [
     "extract_ethereum_address_from_signing_key_items",
     "extract_ethereum_wallet_address_from_bootstrap_payload",
     "extract_signing_keys_array_from_api",
+    "list_signing_key_address_lines_from_items",
+    "list_signing_key_address_lines_from_payload",
 ]

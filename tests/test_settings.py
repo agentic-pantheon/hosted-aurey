@@ -56,6 +56,7 @@ def test_settings_defaults():
     assert s.hosted_email_verification_ttl_seconds == 900
     assert s.hosted_email_code_pepper == ""
     assert s.hosted_claim_email_throttle_seconds == 120
+    assert s.hosted_operator_registration_notify_email == "fabri@agentic-pantheon.com"
 
 
 def test_settings_env_override(monkeypatch):

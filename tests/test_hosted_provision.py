@@ -586,3 +586,57 @@ def test_provision_dual_writes_ocv_when_vault_client_configured() -> None:
     finally:
         session.close()
         engine.dispose()
+
+
+def test_operator_registration_email_after_bootstrap(monkeypatch) -> None:
+    sent: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "aurey.cloud.provision.send_operator_new_registration_email",
+        lambda settings, **kw: sent.append(kw),
+    )
+
+    settings = AureySettings(
+        hosted_platform_enabled=True,
+        hosted_require_verified_email=False,
+        platform_api_key="plt_fake",
+        platform_template_id="tmpl_1",
+        hosted_operator_registration_notify_email="ops@example.com",
+    )
+    session, engine = _memory_session()
+    try:
+        fake = _FakePlatform()
+
+        def _keys(agent_id: str) -> dict:
+            return {
+                "keys": [
+                    {
+                        "chain": "ethereum",
+                        "address": "0xdddddddddddddddddddddddddddddddddddddddd",
+                    },
+                    {"chain": "solana", "address": "SolPubkeyExample"},
+                ]
+            }
+
+        fake.get_agent_signing_keys = _keys  # type: ignore[method-assign]
+
+        row, refreshed = ensure_telegram_user_provisioned(
+            session,
+            settings,
+            fake,
+            telegram_user_id=999,
+            username="newbie",
+        )
+        session.commit()
+        assert refreshed is True
+        assert row.onboarding_state == "awaiting_claim"
+        assert len(sent) == 1
+        assert sent[0]["to_email"] == "ops@example.com"
+        assert sent[0]["telegram_handle"] == "@newbie"
+        assert sent[0]["user_email"] == "tg_999@hosted-aurey.local"
+        lines = sent[0]["wallet_address_lines"]
+        assert isinstance(lines, list)
+        assert len(lines) >= 2
+    finally:
+        session.close()
+        engine.dispose()
