@@ -1085,10 +1085,11 @@ def build_telegram_application(
                     onboard,
                 )
             except HostedAwaitingEmailFlow:
+                sender = html.escape(cfg.hosted_email_sender_label, quote=False)
                 await msg.reply_text(
                     "<b>Aurey</b>\n"
                     "Reply here with your <b>real email</b>. We send a verification code "
-                    "(from fabri@agentic-pantheon.com) — check spam/junk if it does not arrive, "
+                    f"(from {sender}) — check spam/junk if it does not arrive, "
                     "then paste the digits here.",
                     parse_mode="HTML",
                     disable_web_page_preview=True,
@@ -1129,10 +1130,11 @@ def build_telegram_application(
                 return
 
             if onboard == "awaiting_email":
+                sender = html.escape(cfg.hosted_email_sender_label, quote=False)
                 await msg.reply_text(
                     "<b>Aurey</b>\n"
                     "Reply here with your <b>real email</b>. We send a verification code "
-                    "(from fabri@agentic-pantheon.com) — check spam/junk if it does not arrive, "
+                    f"(from {sender}) — check spam/junk if it does not arrive, "
                     "then paste the digits here.",
                     parse_mode="HTML",
                     disable_web_page_preview=True,

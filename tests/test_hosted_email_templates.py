@@ -47,16 +47,35 @@ def test_build_branded_message_related_mime() -> None:
     from aurey.settings import AureySettings
 
     msg = build_hosted_email_message(
-        AureySettings(hosted_email_from="test@example.com"),
+        AureySettings(hosted_email_from="test@example.com", hosted_email_from_name=""),
         to_addrs=["u@example.com"],
         subject="Test",
         text_body="plain",
         html_body=verification_body_html(code="111111", ttl_min=15),
         branded_html=True,
     )
+    assert msg["From"] == "test@example.com"
     assert msg.get_content_type() == "multipart/related"
     types = [p.get_content_type() for p in msg.walk()]
     assert "multipart/alternative" in types
     assert "text/plain" in types
     assert "text/html" in types
     assert "image/jpeg" in types
+
+
+def test_format_hosted_email_from_display_name() -> None:
+    from aurey.cloud.hosted_email import build_hosted_email_message, format_hosted_email_from
+    from aurey.settings import AureySettings
+
+    s = AureySettings(
+        hosted_email_from="fabri@agentic-pantheon.com",
+        hosted_email_from_name="Fabri from Aurey",
+    )
+    assert format_hosted_email_from(s) == "Fabri from Aurey <fabri@agentic-pantheon.com>"
+    msg = build_hosted_email_message(
+        s,
+        to_addrs=["u@example.com"],
+        subject="Test",
+        text_body="plain",
+    )
+    assert msg["From"] == "Fabri from Aurey <fabri@agentic-pantheon.com>"

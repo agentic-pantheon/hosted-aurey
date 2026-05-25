@@ -169,8 +169,16 @@ class AureySettings(BaseSettings):
     hosted_email_from: str = Field(
         default="fabri@agentic-pantheon.com",
         description=(
-            "RFC5322 From address for hosted verification and claim emails "
-            "(e.g. ``fabri@agentic-pantheon.com``)."
+            "RFC5322 mailbox address for hosted outbound mail "
+            "(e.g. ``fabri@agentic-pantheon.com``). Pair with ``hosted_email_from_name`` for "
+            "the visible sender."
+        ),
+    )
+    hosted_email_from_name: str = Field(
+        default="Fabri from Aurey",
+        description=(
+            "Display name in the SMTP ``From`` header (e.g. ``Fabri from Aurey``). "
+            "Set empty to send address-only From."
         ),
     )
     hosted_smtp_host: str = Field(
@@ -443,6 +451,20 @@ class AureySettings(BaseSettings):
         if not s:
             raise ValueError("hosted_email_from must not be empty.")
         return s
+
+    @field_validator("hosted_email_from_name")
+    @classmethod
+    def _hosted_email_from_name_strip(cls, v: str) -> str:
+        return (v or "").strip()
+
+    @property
+    def hosted_email_sender_label(self) -> str:
+        """User-facing sender name for Telegram copy (falls back to mailbox address)."""
+
+        name = self.hosted_email_from_name.strip()
+        if name:
+            return name
+        return self.hosted_email_from.strip()
 
     @field_validator("hosted_smtp_host", "hosted_smtp_user")
     @classmethod

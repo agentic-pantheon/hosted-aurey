@@ -50,6 +50,8 @@ def test_settings_defaults():
     assert s.hosted_http_admin_token is None
     assert s.hosted_require_verified_email is True
     assert s.hosted_email_from == "fabri@agentic-pantheon.com"
+    assert s.hosted_email_from_name == "Fabri from Aurey"
+    assert s.hosted_email_sender_label == "Fabri from Aurey"
     assert s.hosted_smtp_host == ""
     assert s.hosted_smtp_port == 587
     assert s.hosted_smtp_use_tls == "starttls"

@@ -12,6 +12,7 @@ from email.message import EmailMessage, Message
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 
 from aurey.cloud.hosted_email_templates import (
     HEADER_CID,
@@ -81,6 +82,16 @@ def _assert_can_send_mail(settings: AureySettings, *, requires_pepper: bool) -> 
         )
 
 
+def format_hosted_email_from(settings: AureySettings) -> str:
+    """RFC5322 ``From`` value: display name plus ``hosted_email_from`` address."""
+
+    addr = settings.hosted_email_from.strip()
+    name = settings.hosted_email_from_name.strip()
+    if not name:
+        return addr
+    return formataddr((name, addr))
+
+
 def build_hosted_email_message(
     settings: AureySettings,
     *,
@@ -92,7 +103,7 @@ def build_hosted_email_message(
 ) -> Message:
     """Build plain, HTML, or related+inline-image MIME (stdlib-safe structure)."""
 
-    frm = settings.hosted_email_from.strip()
+    frm = format_hosted_email_from(settings)
     plain = text_body.rstrip() + hosted_email_signature_plain()
     header_jpeg = load_header_png_bytes() if branded_html else None
 
@@ -294,6 +305,7 @@ def send_claim_invite_email(
 
 __all__ = [
     "HostedEmailError",
+    "format_hosted_email_from",
     "generate_numeric_verification_code",
     "normalize_contact_email",
     "send_claim_invite_email",
