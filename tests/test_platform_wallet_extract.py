@@ -6,6 +6,7 @@ from aurey.cloud.platform_client import (
     ethereum_address_from_signing_keys_payload,
     extract_ethereum_address_from_signing_key_items,
     extract_ethereum_wallet_address_from_bootstrap_payload,
+    list_signing_key_address_lines_from_payload,
 )
 
 
@@ -44,3 +45,16 @@ def test_signing_keys_items_fallback_first_mapping() -> None:
     items = [{"address": "0xdddddddddddddddddddddddddddddddddddddddd"}]
     addr = extract_ethereum_address_from_signing_key_items(items)
     assert addr is not None
+
+
+def test_list_signing_key_address_lines_includes_all_chains() -> None:
+    body = {
+        "keys": [
+            {"chain": "Ethereum", "address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+            {"chain": "solana", "address": "SoMeSolanaPubkey"},
+        ]
+    }
+    lines = list_signing_key_address_lines_from_payload(body)
+    assert len(lines) == 2
+    assert any(line.startswith("Ethereum:") for line in lines)
+    assert any(line.startswith("solana:") for line in lines)
