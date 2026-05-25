@@ -229,6 +229,37 @@ def send_operator_new_registration_email(
     )
 
 
+def send_operator_access_request_email(
+    settings: AureySettings,
+    *,
+    to_email: str,
+    contact_email: str,
+    telegram_handle: str,
+    telegram_user_id: int,
+    telegram_chat_id: int | None,
+) -> None:
+    """Notify the operator that a non-allowlisted chat requested beta access."""
+
+    _assert_can_send_mail(settings, requires_pepper=False)
+    chat_line = str(telegram_chat_id) if telegram_chat_id is not None else "(unknown)"
+    text_body = (
+        "A Telegram user requested access to Aurey from a chat outside "
+        "AUREY_TELEGRAM_ALLOWED_CHAT_IDS.\n\n"
+        f"Contact email: {contact_email}\n"
+        f"Telegram: {telegram_handle}\n"
+        f"Telegram user id: {telegram_user_id}\n"
+        f"Telegram chat id: {chat_line}\n"
+    )
+    send_hosted_email(
+        settings,
+        to_addrs=[to_email.strip()],
+        subject="Aurey: Telegram access request",
+        text_body=text_body,
+        html_body=None,
+        branded_html=False,
+    )
+
+
 def send_claim_invite_email(
     settings: AureySettings,
     *,
@@ -266,6 +297,7 @@ __all__ = [
     "generate_numeric_verification_code",
     "normalize_contact_email",
     "send_claim_invite_email",
+    "send_operator_access_request_email",
     "send_operator_new_registration_email",
     "send_verification_code_email",
     "verification_code_challenge_hash",

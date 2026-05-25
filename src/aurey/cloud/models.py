@@ -87,4 +87,31 @@ class HostedEmailVerificationORM(Base):
     )
 
 
-__all__ = ["Base", "HostedEmailVerificationORM", "HostedPlatformUserORM"]
+class HostedAccessRequestORM(Base):
+    """Access request from a Telegram user whose chat is outside the allowlist."""
+
+    __tablename__ = "hosted_access_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    telegram_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    contact_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+__all__ = [
+    "Base",
+    "HostedAccessRequestORM",
+    "HostedEmailVerificationORM",
+    "HostedPlatformUserORM",
+]

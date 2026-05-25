@@ -36,6 +36,60 @@ def _telegram_chat_is_allowed(chat_id: int | None, allowed: frozenset[int] | Non
     return chat_id in allowed
 
 
+def _telegram_chat_allowlist_enforced(allowed: frozenset[int] | None) -> bool:
+    return allowed is not None
+
+
+async def _telegram_handle_disallowed_chat_access_request(
+    update: object,
+    context: object,
+    *,
+    state: AureyServiceState,
+    allowed_chats: frozenset[int] | None,
+    message_text: str | None,
+) -> bool:
+    """Run beta access-request flow when chat is outside ``AUREY_TELEGRAM_ALLOWED_CHAT_IDS``.
+
+    Returns ``True`` when the update was handled (caller should return).
+    """
+
+    if not _telegram_chat_allowlist_enforced(allowed_chats):
+        return False
+
+    from telegram import Update
+
+    if not isinstance(update, Update):
+        return False
+
+    chat = update.effective_chat
+    chat_id_raw = getattr(chat, "id", None)
+    cid_opt = int(chat_id_raw) if chat_id_raw is not None else None
+    if _telegram_chat_is_allowed(cid_opt, allowed_chats):
+        return False
+
+    msg = update.effective_message
+    user = update.effective_user
+    tid_raw = getattr(user, "id", None)
+    if msg is None or tid_raw is None:
+        return True
+
+    user_data: dict[str, object] = getattr(context, "user_data", {}) or {}
+
+    from aurey.cloud.hosted_access import telegram_access_request_flow_step
+
+    reply = await asyncio.to_thread(
+        telegram_access_request_flow_step,
+        state,
+        telegram_user_id=int(tid_raw),
+        telegram_username=getattr(user, "username", None),
+        telegram_chat_id=cid_opt,
+        message_text=message_text,
+        user_data=user_data,
+    )
+    await msg.reply_text(reply)
+    return True
+
+
 _HOSTED_AGENT_BLOCK_EMAIL_STATES = frozenset(
     {
         "awaiting_email",
@@ -909,16 +963,17 @@ def build_telegram_application(
     gate_log = logging.getLogger("aurey.telegram.bot")
 
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        _ = context
         chat = update.effective_chat
         chat_id_raw = getattr(chat, "id", None)
-        cid_opt = int(chat_id_raw) if chat_id_raw is not None else None
-        if not _telegram_chat_is_allowed(cid_opt, allowed_chats):
-            gate_log.warning(
-                "Telegram /start ignored (chat_id=%r not in AUREY_TELEGRAM_ALLOWED_CHAT_IDS)",
-                chat_id_raw,
-            )
+        if await _telegram_handle_disallowed_chat_access_request(
+            update,
+            context,
+            state=state,
+            allowed_chats=allowed_chats,
+            message_text=None,
+        ):
             return
+        cid_opt = int(chat_id_raw) if chat_id_raw is not None else None
         msg = update.effective_message
         if msg is None:
             return
@@ -1146,9 +1201,13 @@ def build_telegram_application(
         chat = update.effective_chat
         user = update.effective_user
         chat_id_raw = getattr(chat, "id", None)
-        cid_opt = int(chat_id_raw) if chat_id_raw is not None else None
-        if not _telegram_chat_is_allowed(cid_opt, allowed_chats):
-            gate_log.debug("Telegram message ignored (disallowed chat_id=%r)", chat_id_raw)
+        if await _telegram_handle_disallowed_chat_access_request(
+            update,
+            context,
+            state=state,
+            allowed_chats=allowed_chats,
+            message_text=msg.text,
+        ):
             return
         chat_id_for_session = chat_id_raw if chat_id_raw is not None else "unknown"
 
@@ -1288,11 +1347,15 @@ def build_telegram_application(
             )
 
     async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        _ = context
         chat = update.effective_chat
         chat_id_raw = getattr(chat, "id", None)
-        cid_opt = int(chat_id_raw) if chat_id_raw is not None else None
-        if not _telegram_chat_is_allowed(cid_opt, allowed_chats):
+        if await _telegram_handle_disallowed_chat_access_request(
+            update,
+            context,
+            state=state,
+            allowed_chats=allowed_chats,
+            message_text=None,
+        ):
             return
         msg = update.effective_message
         if msg is None:

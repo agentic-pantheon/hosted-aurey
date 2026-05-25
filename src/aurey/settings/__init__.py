@@ -331,8 +331,10 @@ class AureySettings(BaseSettings):
     telegram_allowed_chat_ids: str | None = Field(
         default=None,
         description=(
-            "Comma- or whitespace-separated Telegram chat ids permitted to use the bot. "
-            "Unset or empty means no restriction."
+            "Comma- or whitespace-separated Telegram chat ids permitted to use the bot "
+            "(private chats: chat id usually equals user id). Unset means no restriction. "
+            "When set, other chats receive an access-request flow (email + handle) instead of "
+            "the agent."
         ),
     )
     llm_proxy: LlmProxyMode = Field(
