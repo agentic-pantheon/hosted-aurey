@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+_log = logging.getLogger(__name__)
 
 from aurey.cloud.hosted_email import (
     HostedEmailError,
@@ -116,7 +119,13 @@ def submit_telegram_access_request(
             telegram_user_id=telegram_user_id,
             telegram_chat_id=telegram_chat_id,
         )
-    except HostedEmailError:
+    except HostedEmailError as exc:
+        _log.warning(
+            "Access-request operator email failed telegram_user_id=%s chat_id=%s: %s",
+            telegram_user_id,
+            telegram_chat_id,
+            exc,
+        )
         session.rollback()
         raise
 
@@ -146,6 +155,47 @@ def telegram_access_request_submitted_message() -> str:
         "Thanks — your request was sent. We'll email you when your chat is approved. "
         "Until then, Aurey isn't available here."
     )
+
+
+def _access_request_email_delivery_failure_message(settings: AureySettings) -> str:
+    if not settings.hosted_email_smtp_configured():
+        return (
+            "Could not deliver your access request — outbound email is not configured on "
+            "this server (AUREY_HOSTED_SMTP_HOST). Please try again later."
+        )
+    return (
+        "Could not deliver your access request right now. "
+        "Please try again in a few minutes."
+    )
+
+
+def _attempt_submit_access_request(
+    db: Session,
+    cfg: AureySettings,
+    *,
+    telegram_user_id: int,
+    telegram_username: str | None,
+    contact_email: str,
+    telegram_chat_id: int | None,
+    user_data: dict[str, object],
+) -> str | None:
+    """Submit and return user reply text, or ``None`` when email delivery failed."""
+
+    try:
+        submit_telegram_access_request(
+            db,
+            cfg,
+            telegram_user_id=telegram_user_id,
+            telegram_username=telegram_username,
+            contact_email=contact_email,
+            telegram_chat_id=telegram_chat_id,
+        )
+        db.commit()
+        clear_telegram_access_request_flow(user_data)
+        return telegram_access_request_submitted_message()
+    except HostedEmailError:
+        db.rollback()
+        return _access_request_email_delivery_failure_message(cfg)
 
 
 def telegram_access_request_flow_step(
@@ -180,29 +230,25 @@ def telegram_access_request_flow_step(
         if pending is not None and pending.notified_at is not None:
             return telegram_access_request_pending_message()
 
-        if telegram_access_request_awaiting_email(user_data) and message_text is not None:
-            try:
-                contact_email = require_contact_email(message_text)
-            except HostedAccessRequestError as exc:
-                return str(exc)
-            try:
-                submit_telegram_access_request(
+        if message_text is not None:
+            contact_email = normalize_contact_email(message_text)
+            if contact_email is not None:
+                submitted = _attempt_submit_access_request(
                     db,
                     cfg,
                     telegram_user_id=telegram_user_id,
                     telegram_username=telegram_username,
                     contact_email=contact_email,
                     telegram_chat_id=telegram_chat_id,
+                    user_data=user_data,
                 )
-                db.commit()
-                clear_telegram_access_request_flow(user_data)
-                return telegram_access_request_submitted_message()
-            except HostedEmailError:
-                db.rollback()
-                return (
-                    "Could not deliver your access request right now. "
-                    "Please try again in a few minutes."
-                )
+                if submitted is not None:
+                    return submitted
+            elif telegram_access_request_awaiting_email(user_data):
+                try:
+                    require_contact_email(message_text)
+                except HostedAccessRequestError as exc:
+                    return str(exc)
 
         mark_telegram_access_request_awaiting_email(user_data)
         db.rollback()

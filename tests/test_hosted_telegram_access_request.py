@@ -83,6 +83,31 @@ def test_access_flow_intro_then_submit(hosted_db_factory) -> None:
     assert "already on file" in pending
 
 
+def test_access_flow_submits_email_without_awaiting_flag(hosted_db_factory) -> None:
+    settings = AureySettings(
+        database_url="postgresql://127.0.0.1/test",
+        hosted_smtp_host="smtp.test",
+        hosted_email_from="noreply@test.dev",
+        hosted_operator_registration_notify_email="ops@example.com",
+    )
+    st = MagicMock()
+    st.settings = settings
+    st.hosted_session_factory = hosted_db_factory
+    user_data: dict[str, object] = {}
+
+    with patch("aurey.cloud.hosted_access.send_operator_access_request_email") as send:
+        reply = telegram_access_request_flow_step(
+            st,
+            telegram_user_id=42,
+            telegram_username="alice",
+            telegram_chat_id=999,
+            message_text="alice@example.com",
+            user_data=user_data,
+        )
+        send.assert_called_once()
+        assert "Thanks" in reply
+
+
 def test_submit_telegram_access_request_persists(hosted_db_factory) -> None:
     settings = AureySettings(
         hosted_smtp_host="smtp.test",
