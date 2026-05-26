@@ -34,6 +34,11 @@ _log = logging.getLogger(__name__)
 # LiFi returns 403 for urllib's default ``Python-urllib/...`` user-agent (edge/WAF).
 _LIFI_HTTP_USER_AGENT = "Aurey/1.0 (LiFi API client; +https://docs.li.fi/)"
 
+# LiFi EVM native sell token (`fromToken`); see docs.li.fi cross-chain ETH examples.
+_LIFI_NATIVE_EVM_TOKEN_ADDRESS = normalize_evm_address(
+    "0x0000000000000000000000000000000000000000"
+)
+
 
 class SwapPrepareInput(BaseModel):
     """LiFi swap quote (`GET /v1/quote`).
@@ -46,8 +51,10 @@ class SwapPrepareInput(BaseModel):
     from_asset: str = Field(
         min_length=1,
         description=(
-            "Token contract (0x…) or symbol as accepted by LiFi ``fromToken``. "
-            "Phrases like «native ETH» map to wrapped native on that chain."
+            "Token contract (0x…) or symbol for LiFi ``fromToken``. "
+            "Selling **native gas ETH**: use phrases like «native ETH» — Aurey maps this to LiFi native "
+            "``0x000…000``. Selling **already-wrapped** WETH: pass WETH ticker or its contract "
+            "``0x…`` — not rewritten to native. Do not use LiFi for WETH→WETH."
         ),
     )
     to_asset: str = Field(
@@ -173,17 +180,29 @@ def _means_native_eth_intent(text: str) -> bool:
     return ("eth" in tokens) or ("ether" in tokens) or ("ethereum" in tokens)
 
 
-def _resolve_lifi_token_param(value: str, *, for_chain: str) -> str:
-    """Apply ``fromToken`` / ``toToken`` normalization; map native-ETH phrasing to wrapped ETH."""
+def _resolve_wrapped_eth_for_chain(for_chain: str) -> str:
+    """Canonical wrapped native (WETH) address for LiFi ``toToken`` when user wants ETH out."""
+
+    slug = for_chain.strip().lower()
+    wrapped = _WRAPPED_ETH_BY_CHAIN_SLUG.get(slug)
+    if wrapped is not None:
+        return normalize_evm_address(wrapped)
+    return "WETH"
+
+
+def _resolve_lifi_token_param(
+    value: str,
+    *,
+    for_chain: str,
+    role: Literal["from", "to"],
+) -> str:
+    """Map user asset labels to LiFi ``fromToken`` / ``toToken`` strings."""
 
     raw = value.strip()
     if _means_native_eth_intent(raw):
-        slug = for_chain.strip().lower()
-        wrapped = _WRAPPED_ETH_BY_CHAIN_SLUG.get(slug)
-        if wrapped is not None:
-            return normalize_evm_address(wrapped)
-        # LiFi expects an address or known symbol — prefer canonical WETH ticker when unmapped.
-        return "WETH"
+        if role == "from":
+            return _LIFI_NATIVE_EVM_TOKEN_ADDRESS
+        return _resolve_wrapped_eth_for_chain(for_chain)
     return _normalize_lifi_token_param(raw)
 
 
@@ -199,8 +218,12 @@ def _lifi_quote_query_params(
     params: dict[str, str] = {
         "fromChain": str(from_cid),
         "toChain": str(to_cid),
-        "fromToken": _resolve_lifi_token_param(parsed.from_asset, for_chain=parsed.from_chain),
-        "toToken": _resolve_lifi_token_param(parsed.to_asset, for_chain=parsed.to_chain),
+        "fromToken": _resolve_lifi_token_param(
+            parsed.from_asset, for_chain=parsed.from_chain, role="from"
+        ),
+        "toToken": _resolve_lifi_token_param(
+            parsed.to_asset, for_chain=parsed.to_chain, role="to"
+        ),
         "fromAmount": str(parsed.from_amount_wei),
         "fromAddress": normalize_evm_address(parsed.from_address),
         "toAddress": normalize_evm_address(parsed.to_address),
@@ -243,6 +266,59 @@ def _lifi_quote_http_error_details(exc: HttpJsonRequestError) -> dict[str, Any]:
     if preview and len(preview) > (len(str(message)) if message else 0):
         details["body_preview"] = preview[:400]
     return details
+
+
+def _enrich_lifi_http_error_hints(
+    details: dict[str, Any],
+    *,
+    sells_native_gas_eth: bool,
+) -> dict[str, Any]:
+    """Add agent-facing remediation hints for common LiFi failures."""
+
+    code = details.get("lifi_code")
+    code_i: int | None
+    if isinstance(code, int):
+        code_i = code
+    elif isinstance(code, str) and code.strip().isdigit():
+        code_i = int(code.strip())
+    else:
+        code_i = None
+
+    if code_i == 1011:
+        details["aurey_hint"] = (
+            "fromToken equals toToken. For wrapping gas ETH, use ``from_asset`` phrasing «native ETH» "
+            "(LiFi native 0x0…0) with ``to_asset`` WETH contract or ticker — not two identical WETH sides."
+        )
+    elif code_i == 1001:
+        parts = [
+            "LiFi found no executable route — amount may be below the protocol minimum, "
+            "temporary liquidity/route issues, or ``fromAmount`` may not match native-wei sizing.",
+        ]
+        if sells_native_gas_eth:
+            parts.append(
+                "When selling native gas ETH, ``from_amount_wei`` must be **ETH wei (18 decimals)**. "
+                "For USD notionals call ``compute_token_amount_from_usd`` with ``sell_kind=native_eth``."
+            )
+        details["aurey_hint"] = " ".join(parts)
+    return details
+
+
+def _same_resolved_lifi_tokens(a: str, b: str) -> bool:
+    """Return True when resolved LiFi ``fromToken`` / ``toToken`` would collide (same-route error)."""
+
+    aa = str(a).strip()
+    bb = str(b).strip()
+    native_aliases = {
+        _LIFI_NATIVE_EVM_TOKEN_ADDRESS.lower(),
+        "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    }
+    al = aa.lower()
+    bl = bb.lower()
+    ca = _LIFI_NATIVE_EVM_TOKEN_ADDRESS.lower() if al in native_aliases else al
+    cb = _LIFI_NATIVE_EVM_TOKEN_ADDRESS.lower() if bl in native_aliases else bl
+    if len(ca) == 42 and ca.startswith("0x") and len(cb) == 42 and cb.startswith("0x"):
+        return ca == cb
+    return aa.strip().upper() == bb.strip().upper()
 
 
 def _lifi_allowance_hint(payload: dict[str, Any]) -> LiFiAllowanceHint | None:
@@ -367,6 +443,21 @@ def _execute_node(runtime: AureyRuntime, state: SwapGraphState) -> SwapGraphStat
     q = _lifi_quote_query_params(
         parsed=parsed, from_cid=from_cid, to_cid=to_cid, runtime=runtime
     )
+    if _same_resolved_lifi_tokens(q["fromToken"], q["toToken"]):
+        return {
+            "error": GraphErrorBody(
+                code="invalid_input",
+                message=(
+                    "Cannot quote swap with identical fromToken and toToken. "
+                    "For wrapping gas ETH use from_asset «native ETH» and to_asset WETH; "
+                    "to sell WETH balance, set from_asset to WETH (ticker or contract), not native ETH."
+                ),
+                details={
+                    "fromToken": q["fromToken"],
+                    "toToken": q["toToken"],
+                },
+            ).model_dump()
+        }
     url = f"{runtime.lifi_base_url.rstrip('/')}/v1/quote?{urlencode(q)}"
     headers: dict[str, str] = {"User-Agent": _LIFI_HTTP_USER_AGENT}
     if lifi_key_header:
@@ -451,7 +542,10 @@ def _execute_node(runtime: AureyRuntime, state: SwapGraphState) -> SwapGraphStat
             "error": GraphErrorBody(
                 code="http_error",
                 message="LiFi rejected the quote request (HTTP error).",
-                details=_lifi_quote_http_error_details(exc),
+                details=_enrich_lifi_http_error_hints(
+                    _lifi_quote_http_error_details(exc),
+                    sells_native_gas_eth=_means_native_eth_intent(parsed.from_asset),
+                ),
             ).model_dump()
         }
     except Exception:

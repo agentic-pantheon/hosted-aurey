@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from openai import APIConnectionError, APITimeoutError
 from pydantic import BaseModel
 
@@ -129,13 +129,10 @@ def _invoke_graph_with_transient_retries(
 ) -> Any:
     """Retry LLM HTTP/network blips during ``graph.invoke`` (often wrapped by LangChain)."""
 
-    messages: list[Any] = []
+    text = message
     if hosted_wallet_address:
-        messages.append(
-            SystemMessage(content=_hosted_wallet_system_turn_line(hosted_wallet_address))
-        )
-    messages.append(HumanMessage(content=message))
-    payload = {"messages": messages}
+        text = f"{_hosted_wallet_system_turn_line(hosted_wallet_address)}\n\n{text}"
+    payload = {"messages": [HumanMessage(content=text)]}
     last_exc: BaseException | None = None
     for attempt in range(_MODEL_TRANSIENT_ATTEMPTS):
         try:

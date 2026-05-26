@@ -120,6 +120,12 @@ class UsdNotionalToTokenRawResult(BaseModel):
         default=None,
         description="True iff ``wallet_balance_raw >= amount_raw`` when both are known.",
     )
+    sell_kind: Literal["erc20", "native_eth"] = Field(
+        default="erc20",
+        description=(
+            "native_eth paths size gas-ETH in wei using wrapped-native USD price as a proxy."
+        ),
+    )
 
 
 class AlchemyPortfolioResult(BaseModel):
@@ -128,6 +134,10 @@ class AlchemyPortfolioResult(BaseModel):
     chain: str
     wallet_address: str
     tokens: list[dict[str, Any]]
+    native_balance: NativeBalanceResult | None = Field(
+        default=None,
+        description="Authoritative chain-native balance via ``eth_getBalance`` (portfolio rows can omit or skew ETH).",
+    )
 
 
 class AlchemyTransferHistoryResult(BaseModel):

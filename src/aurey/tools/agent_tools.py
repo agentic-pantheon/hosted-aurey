@@ -447,18 +447,34 @@ class AlchemyTransferHistoryArgs(BaseModel):
 
 
 class ComputeTokenAmountFromUsdArgs(BaseModel):
-    """Map a USD sell notional to ERC-20 raw units (Alchemy price + on-chain ``decimals``)."""
+    """Map a USD sell notional to raw smallest units (Alchemy price + decimals or fixed 18 for gas ETH)."""
 
     chain: str = Field(min_length=1, description="Chain slug where the token and wallet live.")
     wallet_address: str = Field(
         min_length=1,
         description="Wallet for price API context and optional balance check.",
     )
-    token_address: str = Field(min_length=1, description="Sell token contract (0x).")
     usd_notional: str = Field(
         min_length=1,
         description='USD notional as decimal text (e.g. "5" or "12.34").',
     )
+    token_address: str | None = Field(
+        default=None,
+        description="Sell ERC-20 contract (0x). Required when sell_kind is erc20.",
+    )
+    sell_kind: Literal["erc20", "native_eth"] = Field(
+        default="erc20",
+        description=(
+            "Use ``native_eth`` when ``swap_prepare`` sells gas ETH (``from_asset`` «native ETH»); sizes "
+            "``from_amount_wei`` using wrapped-native USD as a proxy. Ignores ``token_address``."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _sell_token_constraints(self) -> Self:
+        if self.sell_kind == "erc20" and not (self.token_address or "").strip():
+            raise ValueError("token_address is required when sell_kind is erc20")
+        return self
 
 
 class TxExecuteToolArgs(BaseModel):
@@ -746,27 +762,32 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
     def compute_token_amount_from_usd(
         chain: str,
         wallet_address: str,
-        token_address: str,
         usd_notional: str,
+        token_address: str | None = None,
+        sell_kind: Literal["erc20", "native_eth"] = "erc20",
     ) -> dict[str, Any]:
-        """Size a **sell** in raw token units from a **USD notional** (requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path``).
+        """Size a **sell** from **USD notional** (requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path``).
 
-        Uses Alchemy spot price and on-chain ``decimals()`` with **Decimal** math server-side—prefer over
-        hand-calculating ``from_amount_wei`` when the user asks for ``$n`` worth of a token. Returns
-        ``amount_raw`` for ``swap_prepare`` / ``earn_prepare_deposit`` and ``balance_covers_notional_amount``
-        when ``balanceOf`` succeeds. Do not use ``wallet_balance_raw`` as the swap size unless the user asked
-        to sell max.
+        Uses Alchemy spot price with **Decimal** math server-side. For **ERC-20** sells (default), reads
+        on-chain ``decimals()`` and compares ``balanceOf``. For selling **gas ETH** in ``swap_prepare``
+        («native ETH» as ``from_asset``), pass ``sell_kind=native_eth`` — sizes **wei (18 decimals)**
+        from wrapped-native USD; ``token_address`` is ignored.
+
+        Returns ``amount_raw`` for ``swap_prepare`` / ``earn_prepare_deposit`` and checks balance coverage.
+        Do not substitute ``wallet_balance_raw`` as the swap size unless the user asked **max**.
+        ``result["sell_kind"]`` echoes which path ran.
         """
         payload = ComputeTokenAmountFromUsdArgs(
             chain=chain,
             wallet_address=wallet_address,
-            token_address=token_address,
             usd_notional=usd_notional,
+            token_address=token_address,
+            sell_kind=sell_kind,
         )
         state = alchemy_g.invoke(
             {
                 "input": {
-                    **payload.model_dump(),
+                    **payload.model_dump(mode="json", exclude_none=True),
                     "operation": "usd_notional_to_raw",
                 }
             }
@@ -780,7 +801,11 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         chain: str,
         wallet_address: str,
     ) -> dict[str, Any]:
-        """Alchemy Data API portfolio (tokens-by-wallet); requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` in settings."""
+        """Alchemy Data API portfolio (tokens-by-wallet); requires ``AUREY_ALCHEMY_API_KEY`` or ``alchemy_api_secret_path`` in settings.
+
+        ``result`` includes ``native_balance`` (``eth_getBalance`` summary) alongside ``tokens``. Prefer quoting
+        gas ETH from ``native_balance`` because portfolio rows alone can omit or distort native balances.
+        """
         state = alchemy_g.invoke(
             {
                 "input": {
@@ -943,16 +968,18 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         a decimal fraction (e.g. ``0.005`` = 0.5%%). Optional ``order`` is ``FASTEST`` or
         ``CHEAPEST``. Prefer **checksum** ``0x`` token addresses when possible.
 
-        For **native ETH** on an EVM chain, LiFi expects the wrapped native token (WETH). If
-        ``from_asset`` / ``to_asset`` contain natural-language native-ETH phrases (e.g. ``native ETH``),
-        Aurey maps them to wrapped native for the relevant **from** / **to** chain before calling LiFi
-        (so the model should not leave quotes as ``toToken``).
+        **Selling gas ETH:** use phrases like ``native ETH`` as ``from_asset`` — Aurey maps this to
+        LiFi's native ``fromToken`` (`0x000…000`). **Buying** ETH as output: native-ETH wording on
+        ``to_asset`` is rewritten to wrapped native (**WETH** contract / ticker). To sell already-wrapped WETH,
+        pass WETH ticker or its contract ``0x`` as ``from_asset`` (do not combine with identical ``to_asset`` —
+        Aurey rejects WETH→WETH before quoting).
 
-        If the user asks for **\\$n worth** of the **sell** token (fiat notional only), call "
-        "**``compute_token_amount_from_usd``** and use **``amount_raw``** as ``from_amount_wei``. Do "
-        "not substitute wallet balance unless the user asked to sell **all** or **max**. If that "
-        "tool fails, fall back to **``alchemy_get_token_prices``** + ``evm_get_erc20_decimals`` with "
-        "the same floor rule; never invent prices or raw amounts.
+        If the user asks for **\\$n worth** of a **ERC-20** sell token, call **``compute_token_amount_from_usd``**
+        with ``sell_kind=erc20`` (default) and sell token ``0x``. For **USD notionals selling native ETH** use
+        **``sell_kind=native_eth``** and use ``amount_raw`` as ``from_amount_wei``. Do not substitute wallet
+        balance unless the user asked to sell **all** or **max**. If that tool fails, fall back to
+        **``alchemy_get_token_prices``** + ``evm_get_erc20_decimals`` with the same floor rule; never invent
+        prices or raw amounts.
 
         On success, call ``tx_execute(prepared_id=result['prepared_id'])``. The full LiFi
         transaction request is stored server-side so the model does not need to copy calldata.

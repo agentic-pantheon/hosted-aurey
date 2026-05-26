@@ -27,7 +27,7 @@ from aurey.graphs.ens_eth import (
     ens_namehash,
     ens_resolver_calldata,
 )
-from aurey.graphs.evm_codec import to_checksum_evm_address
+from aurey.graphs.evm_codec import normalize_evm_address, to_checksum_evm_address
 from aurey.graphs.ports import HttpJsonPort, HttpJsonRequestError
 from aurey.runtime import AureyRuntime
 from aurey.settings import AureySettings
@@ -483,6 +483,81 @@ def test_alchemy_usd_notional_to_raw_graph():
     assert res["usd_notional"] == "5"
     assert res["wallet_balance_raw"] == "62686"
     assert res["balance_covers_notional_amount"] is True
+    assert res["sell_kind"] == "erc20"
+    _assert_no_banned_values(out)
+
+
+def test_alchemy_usd_notional_native_eth_graph():
+    """$0.50 at $2000/ETH → 0.00025 ETH wei floor with ``eth_getBalance`` coverage check."""
+
+    secrets = {"vault/alchemy": "INJECTED_ALCHEMY_KEY_AAA"}
+    settings = AureySettings(alchemy_api_secret_path="vault/alchemy")
+    wallet = "0x4444444444444444444444444444444444444444"
+    weth_base = "0x4200000000000000000000000000000000000006"
+
+    def match_prices_weth(**kw: object) -> bool:
+        if kw.get("method") != "POST":
+            return False
+        url = str(kw.get("url") or "")
+        if "/prices/v1/" not in url or "tokens/by-address" not in url:
+            return False
+        body = kw.get("json_body") or {}
+        addrs = body.get("addresses") if isinstance(body, dict) else None
+        return (
+            isinstance(addrs, list)
+            and len(addrs) == 1
+            and addrs[0].get("address", "").lower() == weth_base.lower()
+        )
+
+    http = ScriptedHttpClient(
+        [
+            (
+                match_prices_weth,
+                {
+                    "data": [
+                        {
+                            "network": "base-mainnet",
+                            "address": weth_base.lower(),
+                            "prices": [
+                                {
+                                    "currency": "USD",
+                                    "value": "2000",
+                                    "lastUpdatedAt": "2025-01-01T00:00:00Z",
+                                }
+                            ],
+                            "error": None,
+                        }
+                    ],
+                },
+            ),
+        ]
+    )
+    runtime = _runtime(
+        secrets=secrets,
+        settings=settings,
+        http=http,
+        rpc_map={
+            "eth_getBalance": lambda _p: "0xde0b6b3a7640000",  # 1e18 wei
+        },
+    )
+    out = build_alchemy_graph(runtime).invoke(
+        {
+            "input": {
+                "operation": "usd_notional_to_raw",
+                "chain": "base",
+                "wallet_address": wallet,
+                "usd_notional": "0.5",
+                "sell_kind": "native_eth",
+            }
+        }
+    )
+    assert out.get("error") is None
+    res = out["result"]
+    assert res["sell_kind"] == "native_eth"
+    assert res["decimals"] == 18
+    assert res["token_address"].lower() == weth_base.lower()
+    assert res["amount_raw"] == "250000000000000"  # 0.5 / 2000 ETH × 10^18 wei (floor)
+    assert res["balance_covers_notional_amount"] is True
     _assert_no_banned_values(out)
 
 
@@ -580,7 +655,14 @@ def test_alchemy_portfolio_and_transfers_graphs():
             ),
         ]
     )
-    runtime = _runtime(secrets=secrets, settings=settings, http=http, rpc_map={})
+    runtime = _runtime(
+        secrets=secrets,
+        settings=settings,
+        http=http,
+        rpc_map={
+            "eth_getBalance": lambda _p: "0x152d02c7e14af7800000000",  # large balance
+        },
+    )
 
     portfolio = build_alchemy_graph(runtime).invoke(
         {
@@ -595,12 +677,16 @@ def test_alchemy_portfolio_and_transfers_graphs():
     assert portfolio["result"]["tokens"][0]["balance_raw"] == "1000000000000000000"
     assert portfolio["result"]["tokens"][0]["decimals"] == 18
     assert portfolio["result"]["tokens"][0]["balance_decimal"] == "1"
+    nb = portfolio["result"]["native_balance"]
+    assert nb is not None
+    assert nb["balance_eth"] != ""
+    assert int(nb["balance_wei"]) > 0
     assert portfolio["result"]["tokens"][1]["balance_raw"] == "62825"
     assert portfolio["result"]["tokens"][1]["decimals"] == 6
     assert portfolio["result"]["tokens"][1]["balance_decimal"] == "0.062825"
     assert portfolio["result"]["tokens"][2]["balance_raw"] == str(2**63)
     assert portfolio["result"]["tokens"][2]["decimals"] == 18
-    ormsgpack.packb(portfolio["result"])
+    ormsgpack.packb(portfolio["result"]["tokens"])
     _assert_no_banned_values(portfolio)
 
     transfers = build_alchemy_graph(runtime).invoke(
@@ -787,6 +873,127 @@ def test_swap_prepare_graph_maps_native_eth_phrase_to_wrapped_weth():
         "toToken=0x4200000000000000000000000000000000000006" in urls[0]
         or "toToken=0x4200000000000000000000000000000000000006".upper() in urls[0].upper()
     )
+    _assert_no_banned_values(out)
+
+
+def test_swap_prepare_graph_native_eth_sell_uses_lifi_native_from_token():
+    """Selling native gas ETH maps LiFi ``fromToken`` to 0x0, not wrapped WETH."""
+
+    settings = AureySettings(lifi_api_secret_path=None)
+    urls: list[str] = []
+
+    def capture_url(**kw: object) -> bool:
+        urls.append(str(kw.get("url") or ""))
+        return kw.get("method") == "GET" and "/v1/quote?" in str(kw.get("url") or "")
+
+    http = ScriptedHttpClient(
+        [
+            (
+                capture_url,
+                {
+                    "id": "q-eth-usdc",
+                    "transactionRequest": {
+                        "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "data": "0x",
+                    },
+                },
+            )
+        ]
+    )
+    runtime = _runtime(secrets={}, settings=settings, http=http, rpc_map={})
+    usdc = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    out = build_swap_prepare_graph(runtime).invoke(
+        {
+            "input": {
+                "from_chain": "base",
+                "to_chain": "base",
+                "from_asset": "native ETH",
+                "to_asset": usdc,
+                "from_amount_wei": "1000000000000000",
+                "from_address": "0xc1923710468607b8b7db38a6afbb9b432744390c",
+                "to_address": "0xc1923710468607b8b7db38a6afbb9b432744390c",
+            }
+        }
+    )
+    assert out.get("error") is None
+    assert len(urls) == 1
+    quoted = urlparse(urls[0]).query
+    qs = parse_qs(quoted)
+    assert qs["fromToken"][0].lower() == "0x0000000000000000000000000000000000000000"
+    assert qs["toToken"][0].lower() == normalize_evm_address(usdc).lower()
+    _assert_no_banned_values(out)
+
+
+def test_swap_prepare_graph_native_eth_to_weth_distinct_route_tokens():
+    """Native ETH in with WETH out: ``fromToken`` is LiFi native, ``toToken`` is Base WETH."""
+
+    settings = AureySettings(lifi_api_secret_path=None)
+    urls: list[str] = []
+
+    def capture_url(**kw: object) -> bool:
+        urls.append(str(kw.get("url") or ""))
+        return kw.get("method") == "GET" and "/v1/quote?" in str(kw.get("url") or "")
+
+    http = ScriptedHttpClient(
+        [
+            (
+                capture_url,
+                {
+                    "id": "q-wrap",
+                    "transactionRequest": {
+                        "to": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "data": "0x",
+                    },
+                },
+            )
+        ]
+    )
+    runtime = _runtime(secrets={}, settings=settings, http=http, rpc_map={})
+    out = build_swap_prepare_graph(runtime).invoke(
+        {
+            "input": {
+                "from_chain": "base",
+                "to_chain": "base",
+                "from_asset": "native ETH",
+                "to_asset": "WETH",
+                "from_amount_wei": "200000000000000",
+                "from_address": "0xc1923710468607b8b7db38a6afbb9b432744390c",
+                "to_address": "0xc1923710468607b8b7db38a6afbb9b432744390c",
+            }
+        }
+    )
+    assert out.get("error") is None
+    assert len(urls) == 1
+    qs = parse_qs(urlparse(urls[0]).query)
+    assert qs["fromToken"][0].lower() == "0x0000000000000000000000000000000000000000"
+    tt = qs["toToken"][0].lower()
+    assert tt == "weth" or tt == "0x4200000000000000000000000000000000000006"
+    _assert_no_banned_values(out)
+
+
+def test_swap_prepare_graph_preflight_rejects_duplicate_weth_to_weth():
+    """Identical WETH ``from_asset`` / ``to_asset`` is rejected before contacting LiFi."""
+
+    settings = AureySettings(lifi_api_secret_path=None)
+    weth_base = "0x4200000000000000000000000000000000000006"
+    http = ScriptedHttpClient([])
+    runtime = _runtime(secrets={}, settings=settings, http=http, rpc_map={})
+    out = build_swap_prepare_graph(runtime).invoke(
+        {
+            "input": {
+                "from_chain": "base",
+                "to_chain": "base",
+                "from_asset": weth_base,
+                "to_asset": weth_base,
+                "from_amount_wei": "1000000000000000000",
+                "from_address": "0xc1923710468607b8b7db38a6afbb9b432744390c",
+                "to_address": "0xc1923710468607b8b7db38a6afbb9b432744390c",
+            }
+        }
+    )
+    assert out.get("result") is None
+    assert out["error"]["code"] == "invalid_input"
+    assert http.calls == []
     _assert_no_banned_values(out)
 
 

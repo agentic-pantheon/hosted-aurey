@@ -27,14 +27,40 @@ from aurey.graphs.evm_codec import (
     normalize_evm_address,
     parse_evm_uint,
 )
+from aurey.graphs.read import _alchemy_rpc_or_error
 from aurey.graphs.results import (
     AlchemyPortfolioResult,
     AlchemyTokenPricesResult,
     AlchemyTransferHistoryResult,
     GraphErrorBody,
+    NativeBalanceResult,
     UsdNotionalToTokenRawResult,
 )
 from aurey.runtime import AureyRuntime
+
+# Wrapped native used as Alchemy **price feed** surrogate for sizing gas ETH notionals (`sell_kind=native_eth`).
+_WRAPPED_ETH_BY_CHAIN_SLUG: dict[str, str] = {
+    "arbitrum": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+    "avalanche": "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB",
+    "base": "0x4200000000000000000000000000000000000006",
+    "bsc": "0x2170Ed0880ac9A755fd29B2688956BD959F933F8",
+    "ethereum": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "gnosis": "0x6A023CCd1ff6F2045C3309768eAdE5d18d9f7f4b",
+    "linea": "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf347",
+    "polygon": "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+    "scroll": "0x5300000000000000000000000000000000000004",
+}
+
+
+def _wrapped_native_contract(chain_slug: str) -> str | None:
+    raw = chain_slug.strip().lower()
+    w = _WRAPPED_ETH_BY_CHAIN_SLUG.get(raw)
+    if not w:
+        return None
+    try:
+        return normalize_evm_address(w)
+    except ValueError:
+        return None
 
 
 def _alchemy_network(chain: str) -> str | None:
@@ -59,6 +85,13 @@ class AlchemyGraphInput(BaseModel):
     usd_notional: str | None = Field(
         default=None,
         description='USD notional as decimal text (e.g. "5" or "5.00") for usd_notional_to_raw.',
+    )
+    sell_kind: Literal["erc20", "native_eth"] | None = Field(
+        default=None,
+        description=(
+            "For ``usd_notional_to_raw`` only — ``native_eth`` sizes gas ETH in wei from wrapped-native USD "
+            "(ignores ``token_address``)."
+        ),
     )
 
 
@@ -110,13 +143,6 @@ def _validate_node(state: AlchemyGraphState) -> AlchemyGraphState:
                 ).model_dump()
             }
     if parsed.operation == "usd_notional_to_raw":
-        if not parsed.token_address or not str(parsed.token_address).strip():
-            return {
-                "error": GraphErrorBody(
-                    code="invalid_input",
-                    message="token_address is required for usd_notional_to_raw.",
-                ).model_dump()
-            }
         if not parsed.usd_notional or not str(parsed.usd_notional).strip():
             return {
                 "error": GraphErrorBody(
@@ -124,16 +150,35 @@ def _validate_node(state: AlchemyGraphState) -> AlchemyGraphState:
                     message="usd_notional is required for usd_notional_to_raw.",
                 ).model_dump()
             }
-        try:
-            normalize_evm_address(parsed.token_address)
-        except ValueError as exc:
-            return {
-                "error": GraphErrorBody(
-                    code="invalid_input",
-                    message="Invalid token_address.",
-                    details={"reason": str(exc)},
-                ).model_dump()
-            }
+        sk = parsed.sell_kind or "erc20"
+        if sk == "erc20":
+            if not parsed.token_address or not str(parsed.token_address).strip():
+                return {
+                    "error": GraphErrorBody(
+                        code="invalid_input",
+                        message="token_address is required for usd_notional_to_raw when sell_kind is erc20.",
+                    ).model_dump()
+                }
+            try:
+                normalize_evm_address(parsed.token_address)
+            except ValueError as exc:
+                return {
+                    "error": GraphErrorBody(
+                        code="invalid_input",
+                        message="Invalid token_address.",
+                        details={"reason": str(exc)},
+                    ).model_dump()
+                }
+        else:
+            slug = parsed.chain.strip().lower()
+            if _wrapped_native_contract(slug) is None:
+                return {
+                    "error": GraphErrorBody(
+                        code="unsupported_chain",
+                        message="native_eth USD sizing has no bundled wrapped-native catalog entry for this chain.",
+                        details={"chain": slug},
+                    ).model_dump()
+                }
         try:
             usd_d = Decimal(str(parsed.usd_notional).strip())
         except InvalidOperation:
@@ -264,7 +309,28 @@ def _token_decimals(token: dict[str, Any]) -> int | None:
     return None
 
 
-def _normalize_portfolio_token(token: dict[str, Any]) -> dict[str, Any]:
+def _normalize_portfolio_token(
+    token: dict[str, Any], *, wallet_checksum: str
+) -> dict[str, Any] | None:
+    """Augment portfolio row with decoded balances; drop known bad rows."""
+
+    faux = token.get("tokenAddress")
+    wallet_ln = normalize_evm_address(wallet_checksum).lower()
+    if faux is not None:
+        faux_s = str(faux).strip()
+        if faux_s:
+            try:
+                if normalize_evm_address(faux_s).lower() == wallet_ln:
+                    raw_bal = token.get("tokenBalance")
+                    if isinstance(raw_bal, int | str):
+                        try:
+                            if parse_evm_uint(raw_bal) == 0:
+                                return None
+                        except ValueError:
+                            pass
+            except ValueError:
+                pass
+
     out = dict(token)
     raw_balance = token.get("tokenBalance")
     if not isinstance(raw_balance, int | str):
@@ -275,7 +341,20 @@ def _normalize_portfolio_token(token: dict[str, Any]) -> dict[str, Any]:
     except ValueError:
         return out
 
+    tp = token.get("tokenAddress")
+    is_native_row = tp is None or str(tp).strip() == ""
     decimals = _token_decimals(token)
+    if is_native_row and decimals is None:
+        decimals = 18
+
+    md = token.get("tokenMetadata")
+    if isinstance(md, dict):
+        md2 = dict(md)
+        if is_native_row:
+            md2.setdefault("symbol", md2.get("symbol") or "ETH")
+            md2.setdefault("name", md2.get("name") or "Ether")
+        out["tokenMetadata"] = md2
+
     # String: uint256 may exceed msgpack/orjson int64 range in LangGraph checkpoints.
     out["balance_raw"] = uint256_checkpoint_str(balance_raw)
     out["decimals"] = decimals
@@ -285,14 +364,25 @@ def _normalize_portfolio_token(token: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _parse_portfolio_tokens(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _parse_portfolio_tokens(
+    payload: dict[str, Any], *, wallet_checksum: str
+) -> list[dict[str, Any]]:
     """Portfolio API nests tokens under ``data.tokens``."""
 
     data = payload.get("data")
     if isinstance(data, dict):
         tokens = data.get("tokens")
         if isinstance(tokens, list):
-            return [_normalize_portfolio_token(x) for x in tokens if isinstance(x, dict)]
+            rows: list[dict[str, Any]] = []
+            for x in tokens:
+                if not isinstance(x, dict):
+                    continue
+                normalized = _normalize_portfolio_token(
+                    x, wallet_checksum=wallet_checksum
+                )
+                if normalized is not None:
+                    rows.append(normalized)
+            return rows
         return []
     return []
 
@@ -424,23 +514,128 @@ def _execute_node(runtime: AureyRuntime, state: AlchemyGraphState) -> AlchemyGra
                     "includeErc20Tokens": True,
                 },
             )
-            tokens = _parse_portfolio_tokens(payload if isinstance(payload, dict) else {})
-            result = AlchemyPortfolioResult(chain=chain, wallet_address=wallet, tokens=tokens)
+            tokens = _parse_portfolio_tokens(
+                payload if isinstance(payload, dict) else {},
+                wallet_checksum=wallet,
+            )
+            rpc, err_native = _alchemy_rpc_or_error(runtime, chain)
+            native_balance_payload: dict[str, Any] | None = None
+            if err_native is None and rpc is not None:
+                try:
+                    balance_hex = rpc.call("eth_getBalance", [wallet, "latest"])
+                    if isinstance(balance_hex, str):
+                        balance_wei = parse_evm_uint(balance_hex)
+                        cid = chain_id_for(chain)
+                        assert cid is not None
+                        nb = NativeBalanceResult(
+                            chain=chain,
+                            chain_id=cid,
+                            wallet_address=wallet,
+                            balance_wei_hex=balance_hex,
+                            balance_wei=balance_wei,
+                            balance_eth=format_token_units(balance_wei, 18),
+                        )
+                        native_balance_payload = nb.model_dump()
+                except Exception:
+                    native_balance_payload = None
+            result = AlchemyPortfolioResult(
+                chain=chain,
+                wallet_address=wallet,
+                tokens=tokens,
+                native_balance=NativeBalanceResult.model_validate(native_balance_payload)
+                if native_balance_payload
+                else None,
+            )
             return {"result": result.model_dump()}
 
         if parsed.operation == "usd_notional_to_raw":
-            token = normalize_evm_address(parsed.token_address or "")
             rpc_url = f"https://{network}.g.alchemy.com/v2/{api_key}"
-            rpc = runtime.evm_rpc_factory(rpc_url)
+            rpc_local = runtime.evm_rpc_factory(rpc_url)
+            kind = parsed.sell_kind or "erc20"
+
+            prices_url = f"https://api.g.alchemy.com/prices/v1/{api_key}/tokens/by-address"
+            hdr_json_px = hdr_json
+
+            if kind == "native_eth":
+                px_token_t = _wrapped_native_contract(chain)
+                assert px_token_t is not None
+                px_body = runtime.http.request_json(
+                    method="POST",
+                    url=prices_url,
+                    headers=hdr_json_px,
+                    json_body={"addresses": [{"network": network, "address": px_token_t}]},
+                )
+                if not isinstance(px_body, dict):
+                    raise ValueError("unexpected prices envelope")
+                prices_m = _parse_prices_payload(px_body, [px_token_t])
+                price_str_n = prices_m.get(px_token_t)
+                if price_str_n is None:
+                    return {
+                        "error": GraphErrorBody(
+                            code="http_error",
+                            message="No price returned for wrapped native (WETH surrogate).",
+                            details={"reference_token_address": px_token_t},
+                        ).model_dump()
+                    }
+                usd_sn = str(parsed.usd_notional).strip()
+                try:
+                    amount_raw_eth, human_eth = _raw_amount_from_usd_notional(
+                        usd_notional=usd_sn,
+                        price_usd_str=price_str_n,
+                        decimals=18,
+                    )
+                except ValueError as exc:
+                    return {
+                        "error": GraphErrorBody(
+                            code="invalid_input",
+                            message=str(exc),
+                        ).model_dump()
+                    }
+                eth_bal_raw: int | None = None
+                try:
+                    bal_hex_eth = rpc_local.call(
+                        "eth_getBalance",
+                        [wallet, "latest"],
+                    )
+                    if isinstance(bal_hex_eth, str):
+                        eth_bal_raw = parse_evm_uint(bal_hex_eth)
+                except Exception:
+                    eth_bal_raw = None
+
+                covers_eth: bool | None = (
+                    eth_bal_raw >= amount_raw_eth
+                    if eth_bal_raw is not None
+                    else None
+                )
+                cid_eth = chain_id_for(chain)
+                assert cid_eth is not None
+                usd_norm_eth = _decimal_plain_str(Decimal(usd_sn))
+                result_eth = UsdNotionalToTokenRawResult(
+                    chain=chain,
+                    chain_id=cid_eth,
+                    wallet_address=wallet,
+                    token_address=px_token_t,
+                    usd_notional=usd_norm_eth,
+                    price_usd=price_str_n,
+                    decimals=18,
+                    human_token_amount=_decimal_plain_str(human_eth),
+                    amount_raw=str(amount_raw_eth),
+                    wallet_balance_raw=str(eth_bal_raw) if eth_bal_raw is not None else None,
+                    balance_covers_notional_amount=covers_eth,
+                    sell_kind="native_eth",
+                )
+                return {"result": result_eth.model_dump()}
+
+            token = normalize_evm_address(parsed.token_address or "")
             try:
-                raw_decimals = rpc.call(
+                raw_decimals_t = rpc_local.call(
                     "eth_call",
                     [{"to": token, "data": ERC20_DECIMALS_CALLDATA}, "latest"],
                 )
-                if not isinstance(raw_decimals, str):
+                if not isinstance(raw_decimals_t, str):
                     raise TypeError("unexpected eth_call result type")
-                dec_val = decode_abi_uint256_word(raw_decimals)
-                if dec_val > 255:
+                dec_val_t = decode_abi_uint256_word(raw_decimals_t)
+                if dec_val_t > 255:
                     raise ValueError("decimals out of range")
             except Exception:
                 return {
@@ -451,18 +646,17 @@ def _execute_node(runtime: AureyRuntime, state: AlchemyGraphState) -> AlchemyGra
                     ).model_dump()
                 }
 
-            url = f"https://api.g.alchemy.com/prices/v1/{api_key}/tokens/by-address"
-            payload = runtime.http.request_json(
+            px_body_er = runtime.http.request_json(
                 method="POST",
-                url=url,
-                headers=hdr_json,
+                url=prices_url,
+                headers=hdr_json_px,
                 json_body={"addresses": [{"network": network, "address": token}]},
             )
-            if not isinstance(payload, dict):
+            if not isinstance(px_body_er, dict):
                 raise ValueError("unexpected prices envelope")
-            prices = _parse_prices_payload(payload, [token])
-            price_str = prices.get(token)
-            if price_str is None:
+            prices_er = _parse_prices_payload(px_body_er, [token])
+            price_str_er = prices_er.get(token)
+            if price_str_er is None:
                 return {
                     "error": GraphErrorBody(
                         code="http_error",
@@ -471,12 +665,12 @@ def _execute_node(runtime: AureyRuntime, state: AlchemyGraphState) -> AlchemyGra
                     ).model_dump()
                 }
 
-            usd_s = str(parsed.usd_notional).strip()
+            usd_se = str(parsed.usd_notional).strip()
             try:
                 amount_raw_int, human = _raw_amount_from_usd_notional(
-                    usd_notional=usd_s,
-                    price_usd_str=price_str,
-                    decimals=int(dec_val),
+                    usd_notional=usd_se,
+                    price_usd_str=price_str_er,
+                    decimals=int(dec_val_t),
                 )
             except ValueError as exc:
                 return {
@@ -486,38 +680,39 @@ def _execute_node(runtime: AureyRuntime, state: AlchemyGraphState) -> AlchemyGra
                     ).model_dump()
                 }
 
-            bal_raw: int | None = None
+            bal_raw_er: int | None = None
             try:
-                bal_data = erc20_balance_of_calldata(wallet)
-                bal_out = rpc.call(
-                    "eth_call", [{"to": token, "data": bal_data}, "latest"]
+                bal_data_er = erc20_balance_of_calldata(wallet)
+                bal_out_er = rpc_local.call(
+                    "eth_call", [{"to": token, "data": bal_data_er}, "latest"]
                 )
-                if isinstance(bal_out, str):
-                    bal_raw = decode_abi_uint256_word(bal_out)
+                if isinstance(bal_out_er, str):
+                    bal_raw_er = decode_abi_uint256_word(bal_out_er)
             except Exception:
-                bal_raw = None
+                bal_raw_er = None
 
-            bal_str = str(bal_raw) if bal_raw is not None else None
-            covers: bool | None = (
-                bal_raw >= amount_raw_int if bal_raw is not None else None
+            bal_str_er = str(bal_raw_er) if bal_raw_er is not None else None
+            covers_er: bool | None = (
+                bal_raw_er >= amount_raw_int if bal_raw_er is not None else None
             )
-            cid = chain_id_for(chain)
-            assert cid is not None
-            usd_norm = _decimal_plain_str(Decimal(usd_s))
-            result = UsdNotionalToTokenRawResult(
+            cid_er = chain_id_for(chain)
+            assert cid_er is not None
+            usd_norm_er = _decimal_plain_str(Decimal(usd_se))
+            result_er = UsdNotionalToTokenRawResult(
                 chain=chain,
-                chain_id=cid,
+                chain_id=cid_er,
                 wallet_address=wallet,
                 token_address=token,
-                usd_notional=usd_norm,
-                price_usd=price_str,
-                decimals=int(dec_val),
+                usd_notional=usd_norm_er,
+                price_usd=price_str_er,
+                decimals=int(dec_val_t),
                 human_token_amount=_decimal_plain_str(human),
                 amount_raw=str(amount_raw_int),
-                wallet_balance_raw=bal_str,
-                balance_covers_notional_amount=covers,
+                wallet_balance_raw=bal_str_er,
+                balance_covers_notional_amount=covers_er,
+                sell_kind="erc20",
             )
-            return {"result": result.model_dump()}
+            return {"result": result_er.model_dump()}
 
         rpc_url = f"https://{network}.g.alchemy.com/v2/{api_key}"
         sent = _post_asset_transfers(

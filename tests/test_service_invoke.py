@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from openai import APIConnectionError, APITimeoutError
 
 from aurey.graphs.evm_codec import to_checksum_evm_address
@@ -75,7 +75,7 @@ def test_invoke_does_not_retry_on_non_openai_errors() -> None:
     assert graph.invoke.call_count == 1
 
 
-def test_invoke_prepends_system_message_when_hosted_wallet_bound() -> None:
+def test_invoke_prefixes_human_message_when_hosted_wallet_bound() -> None:
     payloads: list[object] = []
 
     def capture_invoke(payload, config=None):
@@ -101,9 +101,10 @@ def test_invoke_prepends_system_message_when_hosted_wallet_bound() -> None:
     assert out.ok is True
     assert len(payloads) == 1
     msgs = payloads[0]["messages"]
-    assert isinstance(msgs[0], SystemMessage)
-    assert isinstance(msgs[1], HumanMessage)
+    assert len(msgs) == 1
+    assert isinstance(msgs[0], HumanMessage)
     assert chk in msgs[0].content
+    assert "hi" in msgs[0].content
 
 
 def test_invoke_uses_server_hosted_wallet_before_ready() -> None:
@@ -137,7 +138,8 @@ def test_invoke_uses_server_hosted_wallet_before_ready() -> None:
     )
     assert out.ok is True
     msgs = payloads[0]["messages"]
-    assert isinstance(msgs[0], SystemMessage)
+    assert len(msgs) == 1
+    assert isinstance(msgs[0], HumanMessage)
     assert chk in msgs[0].content
 
 
@@ -177,7 +179,8 @@ def test_invoke_ignores_client_hosted_wallet_when_hosted_platform_enabled() -> N
     assert out.ok is True
     assert len(payloads) == 1
     msgs = payloads[0]["messages"]
-    assert isinstance(msgs[0], SystemMessage)
+    assert len(msgs) == 1
+    assert isinstance(msgs[0], HumanMessage)
     assert chk_real in msgs[0].content
     assert to_checksum_evm_address(fake_client) not in msgs[0].content
 

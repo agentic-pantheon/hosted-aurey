@@ -79,7 +79,7 @@
     "type": "object"
   },
   "compute_token_amount_from_usd": {
-    "description": "Map a USD sell notional to ERC-20 raw units (Alchemy price + on-chain ``decimals``).",
+    "description": "Map a USD sell notional to raw smallest units (Alchemy price + decimals or fixed 18 for gas ETH).",
     "properties": {
       "chain": {
         "description": "Chain slug where the token and wallet live.",
@@ -87,11 +87,28 @@
         "title": "Chain",
         "type": "string"
       },
-      "token_address": {
-        "description": "Sell token contract (0x).",
-        "minLength": 1,
-        "title": "Token Address",
+      "sell_kind": {
+        "default": "erc20",
+        "description": "Use ``native_eth`` when ``swap_prepare`` sells gas ETH (``from_asset`` \u00abnative ETH\u00bb); sizes ``from_amount_wei`` using wrapped-native USD as a proxy. Ignores ``token_address``.",
+        "enum": [
+          "erc20",
+          "native_eth"
+        ],
+        "title": "Sell Kind",
         "type": "string"
+      },
+      "token_address": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Sell ERC-20 contract (0x). Required when sell_kind is erc20.",
+        "title": "Token Address"
       },
       "usd_notional": {
         "description": "USD notional as decimal text (e.g. \"5\" or \"12.34\").",
@@ -109,7 +126,6 @@
     "required": [
       "chain",
       "wallet_address",
-      "token_address",
       "usd_notional"
     ],
     "title": "ComputeTokenAmountFromUsdArgs",
@@ -719,7 +735,7 @@
         "type": "string"
       },
       "from_asset": {
-        "description": "Token contract (0x\u2026) or symbol as accepted by LiFi ``fromToken``. Phrases like \u00abnative ETH\u00bb map to wrapped native on that chain.",
+        "description": "Token contract (0x\u2026) or symbol for LiFi ``fromToken``. Selling **native gas ETH**: use phrases like \u00abnative ETH\u00bb \u2014 Aurey maps this to LiFi native ``0x000\u2026000``. Selling **already-wrapped** WETH: pass WETH ticker or its contract ``0x\u2026`` \u2014 not rewritten to native. Do not use LiFi for WETH\u2192WETH.",
         "minLength": 1,
         "title": "From Asset",
         "type": "string"
