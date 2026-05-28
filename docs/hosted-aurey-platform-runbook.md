@@ -96,7 +96,7 @@ To force a refresh without waiting for Telegram traffic, POST **`/v1/hosted/sync
 Phase 1 exposes read-only portfolio JSON (via **Zerion** wallet portfolio, fungible positions, and balance chart APIs) and a static Web App when **`AUREY_TELEGRAM_MINIAPP_ENABLED=true`**, **`AUREY_TELEGRAM_MINIAPP_PUBLIC_URL`** points at the HTTP service’s **`/miniapp/`** URL, and `miniapp/dist` is built during deploy.
 
 1. **Duplicate the environment** from the Telegram poller (1Claw bootstrap, vault-id, DB, `AUREY_HOSTED_PLATFORM_ENABLED`, Telegram bot token, **`AUREY_ZERION_API_KEY`**, etc.) onto a **second Railway service** rooted at the same repo.
-2. Configure that service’s **Railway config file** to **`railway.http.toml`** (Dashboard → service → Settings, or `RAILWAY_CONFIG_FILE` as applicable). The HTTP service runs `run_http.py` and serves both **`/v1/miniapp/*`** and **`/miniapp/`** static assets after `npm ci && npm run build` in `miniapp/`.
+2. Configure that service’s **Railway config file** to **`railway.http.toml`** (Dashboard → service → Settings, or `RAILWAY_CONFIG_FILE` as applicable). The HTTP service uses **`Dockerfile.http`** (Node builds `miniapp/dist`, then Python/uv runs `run_http.py`) so the build does not depend on Railpack installing `npm`.
 3. Assign a **public HTTPS domain** to the HTTP service. Set **`AUREY_TELEGRAM_MINIAPP_PUBLIC_URL=https://<http-host>/miniapp/`** on **both** services: the Telegram worker needs this URL for `setChatMenuButton` and `/portfolio`.
 4. In **BotFather**, register the Mini App **domain** to match the HTTP service hostname.
 5. Keep the **polling** service on `run_telegram.py` (`railway.toml`); only one process may call `getUpdates` with a given bot token.
@@ -104,3 +104,5 @@ Phase 1 exposes read-only portfolio JSON (via **Zerion** wallet portfolio, fungi
 When the Mini App is disabled, omit the flag or leave it `false`; the bot skips Web App wiring if the public URL is unset.
 
 **Security defaults (HTTP service):** `initData` max age **4h**; per-user / per-IP rate limits on `POST /v1/miniapp/portfolio`; **120s** server-side Zerion snapshot cache; portfolio reads do **not** trigger signing-keys backfill (use `/v1/hosted/sync-wallet` or Telegram onboarding instead). Tune via `AUREY_TELEGRAM_MINIAPP_*` env vars in `.env.example`.
+
+**Build note:** If you stay on Railpack instead of `Dockerfile.http`, set service variable **`RAILPACK_PACKAGES=node@22`** so `npm` exists during the custom build command; otherwise you will see `npm: not found`.
