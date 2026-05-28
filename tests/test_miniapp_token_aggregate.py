@@ -51,6 +51,32 @@ def test_curated_weth_by_address_on_base():
     )
 
 
+def test_curated_sol_by_address_on_base():
+    assert (
+        is_curated_portfolio_token(
+            "base",
+            symbol="SOL",
+            token_address="0x311935Cd80B76769bF2ecC9D8Ab7635b2139cf82",
+        )
+        is True
+    )
+
+
+def test_curated_usdc_by_address_on_base():
+    assert (
+        is_curated_portfolio_token(
+            "base",
+            symbol="USDC",
+            token_address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        )
+        is True
+    )
+
+
+def test_not_curated_on_unknown_chain():
+    assert is_curated_portfolio_token("unknown", symbol="USDC", token_address=None) is False
+
+
 def test_not_curated_spam_ticker():
     assert (
         is_curated_portfolio_token(

@@ -16,6 +16,17 @@ _log = logging.getLogger(__name__)
 ZERION_API_BASE = "https://api.zerion.io/v1"
 ZERION_API_HOST = "api.zerion.io"
 
+ALLOWED_ZERION_CHART_PERIODS = frozenset({"day", "week", "month", "year", "max"})
+
+
+def normalize_chart_period(raw: str | None) -> str:
+    """Zerion wallet chart slug (``GET .../charts/{period}``)."""
+
+    period = (raw or "month").strip().lower()
+    if period in ALLOWED_ZERION_CHART_PERIODS:
+        return period
+    return "month"
+
 
 def is_allowed_zerion_api_url(url: str) -> bool:
     """Only follow Zerion pagination links on the official API host."""
@@ -216,7 +227,7 @@ def fetch_wallet_balance_chart(
 ) -> dict[str, Any]:
     """GET /v1/wallets/{address}/charts/{chart_period}"""
 
-    period = chart_period.strip().lower() or "month"
+    period = normalize_chart_period(chart_period)
     params: dict[str, str] = {"currency": currency}
     if chain_slugs:
         zids = [slug_to_zerion_chain_id(c) for c in chain_slugs]
@@ -300,6 +311,52 @@ def parse_balance_chart_points(payload: dict[str, Any]) -> list[tuple[int, Decim
     return out
 
 
+def _relationship_resource_id(node: Any) -> str | None:
+    """JSON:API relationship id (direct or nested under ``data``)."""
+
+    if not isinstance(node, dict):
+        return None
+    rid = node.get("id")
+    if isinstance(rid, str) and rid.strip():
+        return rid.strip()
+    data = node.get("data")
+    if isinstance(data, dict):
+        did = data.get("id")
+        if isinstance(did, str) and did.strip():
+            return did.strip()
+    return None
+
+
+def _chain_slug_from_implementations(fungible_info: dict[str, Any]) -> str | None:
+    impls = fungible_info.get("implementations")
+    if not isinstance(impls, list) or not impls:
+        return None
+    chain_ids: set[str] = set()
+    for impl in impls:
+        if not isinstance(impl, dict):
+            continue
+        cid = impl.get("chain_id")
+        if cid is None:
+            continue
+        s = str(cid).strip().lower()
+        if s:
+            chain_ids.add(s)
+    if len(chain_ids) != 1:
+        return None
+    return zerion_chain_id_to_slug(next(iter(chain_ids)))
+
+
+def _fungible_icon_url(fungible_info: dict[str, Any]) -> str | None:
+    icon = fungible_info.get("icon")
+    if isinstance(icon, dict):
+        url = icon.get("url")
+        if isinstance(url, str) and url.strip().lower().startswith("https://"):
+            return url.strip()
+    if isinstance(icon, str) and icon.strip().lower().startswith("https://"):
+        return icon.strip()
+    return None
+
+
 def _token_address_for_chain(fungible_info: dict[str, Any], zerion_chain_id: str) -> str | None:
     impls = fungible_info.get("implementations")
     if not isinstance(impls, list):
@@ -360,14 +417,15 @@ def parse_position_row(item: dict[str, Any]) -> dict[str, Any] | None:
     relationships = rel if isinstance(rel, dict) else {}
 
     chain_rel = relationships.get("chain")
-    zerion_chain = None
-    if isinstance(chain_rel, dict):
-        zerion_chain = chain_rel.get("id")
+    zerion_chain = _relationship_resource_id(chain_rel) if chain_rel is not None else None
     z_chain_s = str(zerion_chain).strip().lower() if zerion_chain is not None else ""
-    chain_slug = zerion_chain_id_to_slug(z_chain_s) if z_chain_s else None
 
     fungible = attrs.get("fungible_info")
     fungible_info = fungible if isinstance(fungible, dict) else {}
+
+    chain_slug = zerion_chain_id_to_slug(z_chain_s) if z_chain_s else None
+    if chain_slug is None:
+        chain_slug = _chain_slug_from_implementations(fungible_info)
 
     quantity = attrs.get("quantity")
     q = quantity if isinstance(quantity, dict) else {}
@@ -384,6 +442,9 @@ def parse_position_row(item: dict[str, Any]) -> dict[str, Any] | None:
     name_raw = fungible_info.get("name")
     name = str(name_raw).strip() if name_raw is not None and str(name_raw).strip() else None
 
+    if not z_chain_s and chain_slug:
+        z_chain_s = slug_to_zerion_chain_id(chain_slug).strip().lower()
+
     token_address = _token_address_for_chain(fungible_info, z_chain_s) if z_chain_s else None
 
     return {
@@ -399,14 +460,17 @@ def parse_position_row(item: dict[str, Any]) -> dict[str, Any] | None:
         "pool_address": attrs.get("pool_address"),
         "is_trash": position_is_trash(attrs, fungible_info),
         "zerion_verified": position_is_verified(fungible_info),
+        "icon_url": _fungible_icon_url(fungible_info),
     }
 
 
 __all__ = [
+    "ALLOWED_ZERION_CHART_PERIODS",
     "fetch_wallet_balance_chart",
     "fetch_wallet_fungible_positions",
     "fetch_wallet_portfolio",
     "is_allowed_zerion_api_url",
+    "normalize_chart_period",
     "parse_balance_chart_points",
     "parse_portfolio_summary",
     "parse_position_row",

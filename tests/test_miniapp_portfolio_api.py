@@ -71,7 +71,7 @@ def test_miniapp_portfolio_ok(monkeypatch):
         errors=[],
     )
 
-    def fake_aggregate(_runtime, *, wallet_address, chains):
+    def fake_aggregate(_runtime, *, wallet_address, chains, chart_period="month"):
         return snap
 
     monkeypatch.setattr("aurey.miniapp.portfolio.aggregate_portfolio_snapshot", fake_aggregate)

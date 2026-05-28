@@ -25,6 +25,7 @@ from aurey.miniapp.zerion_client import (
     fetch_wallet_balance_chart,
     fetch_wallet_fungible_positions,
     fetch_wallet_portfolio,
+    normalize_chart_period,
     parse_balance_chart_points,
     parse_portfolio_summary,
     parse_position_row,
@@ -69,6 +70,7 @@ def aggregate_portfolio_snapshot(
 ) -> PortfolioSnapshot:
     """Merge Zerion portfolio, fungible positions, and balance chart."""
 
+    period = normalize_chart_period(chart_period)
     errors: list[PortfolioFetchError] = []
     api_key = _resolve_zerion_api_key(runtime)
     if not api_key:
@@ -134,7 +136,7 @@ def aggregate_portfolio_snapshot(
                     http,
                     api_key=api_key,
                     wallet_address=wallet_address,
-                    chart_period=chart_period,
+                    chart_period=period,
                     chain_slugs=chains,
                 ),
             )
@@ -193,7 +195,7 @@ def aggregate_portfolio_snapshot(
         if parsed is None:
             continue
         chain = parsed.get("chain")
-        if isinstance(chain, str) and chain.strip():
+        if isinstance(chain, str) and chain.strip() and chain.strip().lower() != "unknown":
             chains_with_data.add(chain.strip().lower())
 
         usd_dec = parsed.get("usd_value")
@@ -217,6 +219,8 @@ def aggregate_portfolio_snapshot(
                 token_usd_sum += usd_dec
                 if isinstance(chain, str):
                     usd_by_chain[chain] = usd_by_chain.get(chain, Decimal(0)) + usd_dec
+            icon = parsed.get("icon_url")
+            icon_s = icon.strip() if isinstance(icon, str) and icon.strip() else None
             token_out.append(
                 PortfolioToken(
                     chain=chain or "unknown",
@@ -226,6 +230,7 @@ def aggregate_portfolio_snapshot(
                     usd_value=str(usd_dec) if usd_dec is not None else None,
                     token_address=addr if isinstance(addr, str) else None,
                     curated=curated,
+                    icon_url=icon_s,
                 )
             )
         else:
@@ -276,7 +281,7 @@ def aggregate_portfolio_snapshot(
             chart_points.append(PortfolioBalanceChartPoint(ts=ts, usd=str(val)))
 
     balance_chart = (
-        PortfolioBalanceChart(period=chart_period.strip().lower() or "month", points=chart_points)
+        PortfolioBalanceChart(period=period, points=chart_points)
         if chart_points
         else None
     )

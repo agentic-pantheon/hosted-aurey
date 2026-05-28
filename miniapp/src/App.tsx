@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BalanceChart } from "./BalanceChart";
+import { chartRainbowColor } from "./chartColors";
 import { PieChart, topSlicesByValue } from "./PieChart";
 import {
   isPortfolioCacheFresh,
   readPortfolioCache,
   writePortfolioCache,
 } from "./portfolioCache";
-import { fetchPortfolioSnapshot } from "./portfolioFetch";
+import { fetchPortfolioSnapshot, zerionWalletUrl, type ChartPeriod } from "./portfolioFetch";
+import { applyAppTheme } from "./theme";
+import { TokenIcon } from "./TokenIcon";
 import { usePullToRefresh } from "./usePullToRefresh";
 
 type PortfolioTokenRow = {
@@ -17,6 +20,7 @@ type PortfolioTokenRow = {
   usd_value: string | null;
   token_address: string | null;
   curated?: boolean;
+  icon_url?: string | null;
 };
 
 type PortfolioTokenAggregated = {
@@ -27,6 +31,7 @@ type PortfolioTokenAggregated = {
   balance_decimal: string;
   usd_value: string | null;
   curated: boolean;
+  icon_url?: string | null;
 };
 
 type PortfolioDefi = {
@@ -68,6 +73,14 @@ type PortfolioSnap = {
 
 type Tab = "overview" | "tokens" | "defi";
 
+const CHART_PERIOD_OPTIONS: { id: ChartPeriod; label: string }[] = [
+  { id: "day", label: "1D" },
+  { id: "week", label: "1W" },
+  { id: "month", label: "1M" },
+  { id: "year", label: "1Y" },
+  { id: "max", label: "All" },
+];
+
 const USD_FMT = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -86,17 +99,19 @@ function formatUsd(n: number): string {
   return USD_FMT.format(n);
 }
 
-function applyTheme(): void {
-  const wa = window.Telegram?.WebApp;
-  if (!wa?.themeParams) return;
-  const tp = wa.themeParams;
-  const root = document.documentElement;
-  if (tp.bg_color) root.style.setProperty("--tg-bg-color", tp.bg_color);
-  if (tp.text_color) root.style.setProperty("--tg-text-color", tp.text_color);
-  if (tp.hint_color) root.style.setProperty("--tg-hint-color", tp.hint_color);
-  if (tp.link_color) root.style.setProperty("--tg-accent-text-color", tp.link_color);
-  if (tp.button_color) root.style.setProperty("--tg-button-color", tp.button_color);
-  if (tp.button_text_color) root.style.setProperty("--tg-button-text-color", tp.button_text_color);
+function formatChainSlug(slug: string): string {
+  const s = slug.trim().toLowerCase();
+  if (!s || s === "unknown") return "Unknown";
+  const aliases: Record<string, string> = {
+    bsc: "BSC",
+    arbitrum: "Arbitrum",
+    optimism: "Optimism",
+    ethereum: "Ethereum",
+    base: "Base",
+    polygon: "Polygon",
+    monad: "Monad",
+  };
+  return aliases[s] ?? s.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function tabLabel(t: Tab): string {
@@ -167,6 +182,7 @@ function telegramUserId(): number | undefined {
 export default function App(): JSX.Element {
   const wa = window.Telegram?.WebApp;
   const [tab, setTab] = useState<Tab>("overview");
+  const [chartPeriod, setChartPeriod] = useState<ChartPeriod>("month");
   const [chainSel, setChainSel] = useState<string>("all");
   const [showUnverified, setShowUnverified] = useState(false);
   const [snapshot, setSnapshot] = useState<PortfolioSnap | null>(null);
@@ -176,26 +192,29 @@ export default function App(): JSX.Element {
   const [detailCode, setDetailCode] = useState<string | null>(null);
   const initDataRef = useRef("");
 
-  const applyFetchResult = useCallback((result: Awaited<ReturnType<typeof fetchPortfolioSnapshot<PortfolioSnap>>>) => {
-    if (result.ok) {
-      setSnapshot(result.snapshot);
-      setFatal(null);
-      setDetailCode(null);
-      const at = Date.now();
-      setFetchedAt(at);
-      writePortfolioCache(telegramUserId(), result.snapshot, at);
-      return;
-    }
-    setFatal(result.fatal);
-    setDetailCode(result.detailCode);
-  }, []);
+  const applyFetchResult = useCallback(
+    (result: Awaited<ReturnType<typeof fetchPortfolioSnapshot<PortfolioSnap>>>, period: ChartPeriod) => {
+      if (result.ok) {
+        setSnapshot(result.snapshot);
+        setFatal(null);
+        setDetailCode(null);
+        const at = Date.now();
+        setFetchedAt(at);
+        writePortfolioCache(telegramUserId(), period, result.snapshot, at);
+        return;
+      }
+      setFatal(result.fatal);
+      setDetailCode(result.detailCode);
+    },
+    [],
+  );
 
   const refreshFromNetwork = useCallback(async () => {
     const init = initDataRef.current;
     if (!init) return;
-    const result = await fetchPortfolioSnapshot<PortfolioSnap>(init);
-    applyFetchResult(result);
-  }, [applyFetchResult]);
+    const result = await fetchPortfolioSnapshot<PortfolioSnap>(init, chartPeriod);
+    applyFetchResult(result, chartPeriod);
+  }, [applyFetchResult, chartPeriod]);
 
   const { pullOffset, refreshing, handlers: pullHandlers } = usePullToRefresh({
     onRefresh: refreshFromNetwork,
@@ -203,9 +222,8 @@ export default function App(): JSX.Element {
   });
 
   useEffect(() => {
-    applyTheme();
+    applyAppTheme();
     wa?.expand();
-    wa?.setHeaderColor("bg_color");
   }, [wa]);
 
   useEffect(() => {
@@ -225,7 +243,7 @@ export default function App(): JSX.Element {
       }
 
       const uid = telegramUserId();
-      const cached = readPortfolioCache<PortfolioSnap>(uid);
+      const cached = readPortfolioCache<PortfolioSnap>(uid, chartPeriod);
       const cacheFresh = cached !== null && isPortfolioCacheFresh(cached.fetchedAt);
 
       if (cacheFresh && !cancelled) {
@@ -235,7 +253,7 @@ export default function App(): JSX.Element {
       }
 
       try {
-        const result = await fetchPortfolioSnapshot<PortfolioSnap>(init);
+        const result = await fetchPortfolioSnapshot<PortfolioSnap>(init, chartPeriod);
         if (cancelled) return;
         if (!result.ok) {
           if (cacheFresh && cached !== null && !cancelled) {
@@ -244,10 +262,10 @@ export default function App(): JSX.Element {
             setFatal(null);
             setDetailCode(null);
           } else {
-            applyFetchResult(result);
+            applyFetchResult(result, chartPeriod);
           }
         } else {
-          applyFetchResult(result);
+          applyFetchResult(result, chartPeriod);
         }
       } catch (e) {
         if (!cancelled) {
@@ -268,7 +286,7 @@ export default function App(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [applyFetchResult]);
+  }, [applyFetchResult, chartPeriod]);
 
   const chains = useMemo(() => snapshot?.chains_available ?? [], [snapshot]);
 
@@ -296,6 +314,7 @@ export default function App(): JSX.Element {
           balance_decimal: bal,
           usd_value: usd > 0 ? String(usd) : null,
           curated: t.curated ?? false,
+          icon_url: t.icon_url ?? null,
         });
       } else {
         const chains = new Set([...prev.chains, t.chain]);
@@ -307,6 +326,7 @@ export default function App(): JSX.Element {
           balance_decimal: String(totalBal),
           usd_value: totalUsd > 0 ? String(totalUsd) : prev.usd_value,
           curated: prev.curated && (t.curated ?? false),
+          icon_url: prev.icon_url ?? t.icon_url ?? null,
         });
       }
     }
@@ -370,7 +390,14 @@ export default function App(): JSX.Element {
         <div className="card">
           <div className="subtle">Total portfolio (priced holdings only)</div>
           <div className="total">{headline}</div>
-          <div className="subtle wallet-mono">{snapshot.wallet_address}</div>
+          <a
+            className="wallet-link wallet-mono"
+            href={zerionWalletUrl(snapshot.wallet_address)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {snapshot.wallet_address}
+          </a>
           {unpricedCount > 0 ? (
             <div className="subtle" style={{ marginTop: 8 }}>
               {unpricedCount} position(s) have balance but no USD quote — not included in total.
@@ -378,14 +405,20 @@ export default function App(): JSX.Element {
           ) : null}
           {barRows.length > 0 && (
             <div style={{ marginTop: "12px" }}>
-              {barRows.map((row) => {
+              {barRows.map((row, barIndex) => {
                 const v = parseUsd(row.usd);
                 const pct = v > 0 ? Math.round((100 * v) / maxBar) : 0;
                 return (
                   <div key={row.chain} className="bar">
-                    <span className="name">{row.chain}</span>
+                    <span className="name">{formatChainSlug(row.chain)}</span>
                     <div className="track">
-                      <div className="fill" style={{ width: `${pct}%` }} />
+                      <div
+                        className="fill"
+                        style={{
+                          width: `${pct}%`,
+                          background: chartRainbowColor(barIndex),
+                        }}
+                      />
                     </div>
                     <small>{formatUsd(v)}</small>
                   </div>
@@ -394,9 +427,13 @@ export default function App(): JSX.Element {
             </div>
           )}
         </div>
-        {snapshot.balance_chart?.points?.length ? (
-          <BalanceChart title="Balance (Zerion)" points={snapshot.balance_chart.points} />
-        ) : null}
+        <BalanceChart
+          title="Balance (Zerion)"
+          points={snapshot.balance_chart?.points ?? []}
+          period={chartPeriod}
+          periodOptions={CHART_PERIOD_OPTIONS}
+          onPeriodChange={(p) => setChartPeriod(p as ChartPeriod)}
+        />
         <PieChart title="By token / position" slices={tokenPie} />
         <PieChart title="By chain" slices={chainPie} />
       </>
@@ -419,21 +456,26 @@ export default function App(): JSX.Element {
     return (
       <>
         {sorted.map((t) => (
-          <div key={t.asset_key} className="card">
-            <strong>
-              {t.symbol}
-              {!t.curated ? (
-                <span className="badge-unverified"> unverified</span>
-              ) : null}
-            </strong>
-            <div className="chain-pills">
-              {t.chains.map((c) => (
-                <span key={c} className="chain-pill">
-                  {c}
-                </span>
-              ))}
+          <div key={t.asset_key} className="card token-card">
+            <div className="token-card-head">
+              <TokenIcon symbol={t.symbol} iconUrl={t.icon_url} size={40} />
+              <div className="token-card-title">
+                <strong>
+                  {t.symbol}
+                  {!t.curated ? (
+                    <span className="badge-unverified"> unverified</span>
+                  ) : null}
+                </strong>
+                <div className="chain-pills">
+                  {t.chains.map((c) => (
+                    <span key={c} className="chain-pill">
+                      {formatChainSlug(c)}
+                    </span>
+                  ))}
+                </div>
+              </div>
             </div>
-            {t.name ?? ""}
+            {t.name ? <div className="token-card-name">{t.name}</div> : null}
             <div className="row-muted">
               {t.balance_decimal}
               {" · "}
@@ -572,7 +614,7 @@ export default function App(): JSX.Element {
                 data-active={chainSel === c ? "1" : "0"}
                 onClick={() => setChainSel(c)}
               >
-                {c}
+                {c === "all" ? "All chains" : formatChainSlug(c)}
               </button>
             ))}
           </div>

@@ -37,10 +37,13 @@ def aggregate_tokens_by_symbol(rows: list[PortfolioToken]) -> list[PortfolioToke
                 "usd": Decimal(0),
                 "has_usd": False,
                 "curated": True,
+                "icon_url": None,
             }
         b = buckets[key]
         if row.name and (not b["name"] or b["name"] == "Native balance"):
             b["name"] = row.name
+        if not b["icon_url"] and row.icon_url:
+            b["icon_url"] = row.icon_url
         b["chains"].add(row.chain)
         b["balance"] += _dec(row.balance_decimal)
         u = _dec(row.usd_value) if row.usd_value else Decimal(0)
@@ -67,6 +70,7 @@ def aggregate_tokens_by_symbol(rows: list[PortfolioToken]) -> list[PortfolioToke
                 balance_decimal=_dec_plain(b["balance"]),
                 usd_value=usd_str,
                 curated=b["curated"],
+                icon_url=b["icon_url"],
             )
         )
     return out

@@ -57,6 +57,55 @@ def test_parse_position_row_wallet_token():
                 "symbol": "USDC",
                 "name": "USD Coin",
                 "flags": {"verified": True},
+                "icon": {"url": "https://cdn.zerion.io/icons/usdc.png"},
+                "implementations": [
+                    {"chain_id": "base", "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "decimals": 6},
+                ],
+            },
+            "flags": {"is_trash": False},
+        },
+        "relationships": {"chain": {"data": {"type": "chains", "id": "base"}}},
+    }
+    row = parse_position_row(item)
+    assert row is not None
+    assert row["chain"] == "base"
+    assert row["symbol"] == "USDC"
+    assert row["usd_value"] == Decimal("42.5")
+    assert row["zerion_verified"] is True
+    assert row["icon_url"] == "https://cdn.zerion.io/icons/usdc.png"
+
+
+def test_parse_position_row_chain_from_implementations_when_relationship_missing():
+    item = {
+        "attributes": {
+            "position_type": "wallet",
+            "value": 1,
+            "quantity": {"numeric": "1"},
+            "fungible_info": {
+                "symbol": "WETH",
+                "implementations": [
+                    {"chain_id": "base", "address": "0x4200000000000000000000000000000000000006"},
+                ],
+            },
+        },
+        "relationships": {},
+    }
+    row = parse_position_row(item)
+    assert row is not None
+    assert row["chain"] == "base"
+
+
+def test_parse_position_row_wallet_token_legacy_chain_id():
+    item = {
+        "type": "positions",
+        "attributes": {
+            "position_type": "wallet",
+            "value": 42.5,
+            "quantity": {"numeric": "1.5", "decimals": 18},
+            "fungible_info": {
+                "symbol": "USDC",
+                "name": "USD Coin",
+                "flags": {"verified": True},
                 "implementations": [
                     {"chain_id": "base", "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "decimals": 6},
                 ],
@@ -68,9 +117,6 @@ def test_parse_position_row_wallet_token():
     row = parse_position_row(item)
     assert row is not None
     assert row["chain"] == "base"
-    assert row["symbol"] == "USDC"
-    assert row["usd_value"] == Decimal("42.5")
-    assert row["zerion_verified"] is True
 
 
 def test_parse_position_row_deposit():

@@ -1,5 +1,7 @@
 const API_JSON = "/v1/miniapp/portfolio";
 
+export type ChartPeriod = "day" | "week" | "month" | "year" | "max";
+
 export type PortfolioFetchFailure = {
   ok: false;
   fatal: string;
@@ -13,11 +15,14 @@ export type PortfolioFetchSuccess<T> = {
 
 export type PortfolioFetchResult<T> = PortfolioFetchSuccess<T> | PortfolioFetchFailure;
 
-export async function fetchPortfolioSnapshot<T>(initData: string): Promise<PortfolioFetchResult<T>> {
+export async function fetchPortfolioSnapshot<T>(
+  initData: string,
+  chartPeriod: ChartPeriod = "month",
+): Promise<PortfolioFetchResult<T>> {
   const res = await fetch(API_JSON, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ init_data: initData }),
+    body: JSON.stringify({ init_data: initData, chart_period: chartPeriod }),
   });
   const ct = res.headers.get("content-type") || "";
   let body: Record<string, unknown> = {};
@@ -37,4 +42,9 @@ export async function fetchPortfolioSnapshot<T>(initData: string): Promise<Portf
     };
   }
   return { ok: true, snapshot: body as T };
+}
+
+export function zerionWalletUrl(walletAddress: string): string {
+  const addr = walletAddress.trim();
+  return `https://app.zerion.io/${encodeURIComponent(addr)}/overview`;
 }

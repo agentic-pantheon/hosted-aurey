@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 
 from aurey.miniapp.schemas import PortfolioSnapshot
+from aurey.miniapp.zerion_client import normalize_chart_period
 
 
 @dataclass(frozen=True)
@@ -29,10 +30,12 @@ class PortfolioSnapshotCache:
         telegram_user_id: int,
         wallet_address: str,
         chains: tuple[str, ...],
+        chart_period: str = "month",
     ) -> str:
         w = wallet_address.strip().lower()
         c = ",".join(sorted(chains))
-        return f"{telegram_user_id}:{w}:{c}"
+        p = normalize_chart_period(chart_period)
+        return f"{telegram_user_id}:{w}:{c}:{p}"
 
     def get(self, key: str, *, now: float | None = None) -> PortfolioSnapshot | None:
         t = float(now) if now is not None else time.monotonic()

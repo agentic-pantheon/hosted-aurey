@@ -10,6 +10,7 @@ declare global {
         initDataUnsafe?: { user?: { id?: number; username?: string } };
         themeParams: Record<string, string | undefined>;
         setHeaderColor: (color: string) => void;
+        setBackgroundColor?: (color: string) => void;
         colorScheme?: string;
       };
     };

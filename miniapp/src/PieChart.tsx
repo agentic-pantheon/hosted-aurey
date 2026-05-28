@@ -1,26 +1,15 @@
 /** Simple SVG donut chart (no external chart library). */
 
+import { chartRainbowColor } from "./chartColors";
+
 export type PieSlice = {
   label: string;
   value: number;
   color: string;
 };
 
-const PALETTE = [
-  "#6366f1",
-  "#a855f7",
-  "#ec4899",
-  "#f59e0b",
-  "#10b981",
-  "#3b82f6",
-  "#ef4444",
-  "#14b8a6",
-  "#8b5cf6",
-  "#64748b",
-];
-
 export function paletteColor(index: number): string {
-  return PALETTE[index % PALETTE.length];
+  return chartRainbowColor(index);
 }
 
 function polar(cx: number, cy: number, r: number, angleRad: number): { x: number; y: number } {
@@ -78,9 +67,9 @@ export function PieChart({ title, slices, size = 168 }: Props): JSX.Element {
       <div className="chart-row">
         <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={title}>
           {paths.map((p) => (
-            <path key={p.label} d={p.d} fill={p.color} stroke="var(--tg-bg-color, #0f0f14)" strokeWidth={1} />
+            <path key={p.label} d={p.d} fill={p.color} stroke="var(--background)" strokeWidth={1} />
           ))}
-          <circle cx={cx} cy={cy} r={r * 0.52} fill="var(--tg-bg-color, #0f0f14)" />
+          <circle cx={cx} cy={cy} r={r * 0.52} fill="var(--background)" />
         </svg>
         <ul className="chart-legend">
           {paths.map((p) => (

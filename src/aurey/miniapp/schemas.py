@@ -48,6 +48,10 @@ class PortfolioToken(BaseModel):
         default=False,
         description="True when native on a catalog chain or ERC-20 matches ``known_addresses.json``.",
     )
+    icon_url: str | None = Field(
+        default=None,
+        description="HTTPS PNG (or image) URL from Zerion ``fungible_info.icon`` when available.",
+    )
 
 
 class PortfolioTokenAggregated(BaseModel):
@@ -67,6 +71,10 @@ class PortfolioTokenAggregated(BaseModel):
     curated: bool = Field(
         default=False,
         description="True only if every per-chain leg is curated.",
+    )
+    icon_url: str | None = Field(
+        default=None,
+        description="Best icon URL among per-chain legs (Zerion or null).",
     )
 
 

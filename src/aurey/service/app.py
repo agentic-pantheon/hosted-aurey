@@ -56,6 +56,10 @@ class MiniAppPortfolioRequest(BaseModel):
     """Telegram WebApp ``initData`` payload (query string form, not JSON)."""
 
     init_data: str = Field(..., min_length=1, description="Telegram.WebApp.initData string.")
+    chart_period: str | None = Field(
+        default=None,
+        description="Zerion balance chart period: day, week, month, year, max.",
+    )
 
 
 class MiniAppConfigResponse(BaseModel):
@@ -302,12 +306,16 @@ def create_fastapi_application(
             raise HTTPException(status_code=403, detail={"code": "wallet_not_ready"})
 
         chains = st.telegram_miniapp_default_chain_slugs
+        from aurey.miniapp.zerion_client import normalize_chart_period
+
+        chart_period = normalize_chart_period(body.chart_period)
         cache_ttl = st.telegram_miniapp_portfolio_cache_ttl_seconds
         if cache_ttl > 0 and resolved.wallet_address:
             cache_key = portfolio_snapshot_cache.cache_key(
                 telegram_user_id=web_user.telegram_user_id,
                 wallet_address=resolved.wallet_address,
                 chains=chains,
+                chart_period=chart_period,
             )
             cached = portfolio_snapshot_cache.get(cache_key)
             if cached is not None:
@@ -317,6 +325,7 @@ def create_fastapi_application(
             svc.runtime,
             wallet_address=resolved.wallet_address,
             chains=chains,
+            chart_period=chart_period,
         )
         if cache_ttl > 0 and resolved.wallet_address:
             portfolio_snapshot_cache.set(
