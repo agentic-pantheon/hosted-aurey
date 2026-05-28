@@ -175,12 +175,13 @@ def aggregate_portfolio_snapshot(
                 chart_payload = result
 
     total_from_portfolio: Decimal | None = None
-    usd_by_chain: dict[str, Decimal] = {}
+    portfolio_by_chain: dict[str, Decimal] = {}
+    position_by_chain: dict[str, Decimal] = {}
     if portfolio_payload is not None:
         total_from_portfolio, by_z_chain = parse_portfolio_summary(portfolio_payload)
         for z_chain, usd in by_z_chain.items():
             slug = zerion_chain_id_to_slug(z_chain) or z_chain
-            usd_by_chain[slug] = usd_by_chain.get(slug, Decimal(0)) + usd
+            portfolio_by_chain[slug] = portfolio_by_chain.get(slug, Decimal(0)) + usd
 
     token_out: list[PortfolioToken] = []
     defi_out: list[PortfolioDefiPosition] = []
@@ -218,7 +219,7 @@ def aggregate_portfolio_snapshot(
             if usd_dec is not None and usd_dec > 0:
                 token_usd_sum += usd_dec
                 if isinstance(chain, str):
-                    usd_by_chain[chain] = usd_by_chain.get(chain, Decimal(0)) + usd_dec
+                    position_by_chain[chain] = position_by_chain.get(chain, Decimal(0)) + usd_dec
             icon = parsed.get("icon_url")
             icon_s = icon.strip() if isinstance(icon, str) and icon.strip() else None
             token_out.append(
@@ -239,7 +240,7 @@ def aggregate_portfolio_snapshot(
             if usd_dec is not None and usd_dec > 0:
                 defi_usd_sum += usd_dec
                 if isinstance(chain, str):
-                    usd_by_chain[chain] = usd_by_chain.get(chain, Decimal(0)) + usd_dec
+                    position_by_chain[chain] = position_by_chain.get(chain, Decimal(0)) + usd_dec
             pool = parsed.get("pool_address")
             vault = str(pool).strip() if pool is not None and str(pool).strip() else None
             defi_out.append(
@@ -263,6 +264,10 @@ def aggregate_portfolio_snapshot(
         total = token_usd_sum + defi_usd_sum
     if total is not None and total <= 0:
         total = None
+
+    # Chain bars: Zerion portfolio distribution when present (matches ``total_usd``);
+    # otherwise roll up priced position rows only — never both (that doubled Base ~2×).
+    usd_by_chain = portfolio_by_chain if portfolio_by_chain else position_by_chain
 
     summary_chains: list[PortfolioSummaryByChain] = []
     chain_keys = sorted(set(chains) | set(usd_by_chain.keys()) | chains_with_data)

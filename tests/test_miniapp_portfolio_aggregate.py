@@ -122,6 +122,8 @@ def test_aggregate_portfolio_from_zerion_mocks(monkeypatch):
         chains=("base",),
     )
     assert snap.summary.total_usd == "50"
+    base_row = next(r for r in snap.summary.by_chain if r.chain == "base")
+    assert base_row.usd == "50"
     assert len(snap.tokens) == 1
     assert snap.tokens[0].symbol == "USDC"
     assert snap.balance_chart is not None
