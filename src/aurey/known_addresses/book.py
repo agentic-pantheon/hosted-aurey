@@ -119,3 +119,47 @@ def lookup_known_token(chain_slug: str, ticker: str) -> KnownToken | None:
         address=normalize_evm_address(addr),
         name=str(name) if name is not None else hit_key,
     )
+
+
+def lookup_known_token_by_address(chain_slug: str, token_address: str) -> KnownToken | None:
+    """Resolve by contract address on a canonical chain slug."""
+
+    cid_int = chain_id_for(chain_slug.strip().lower())
+    if cid_int is None:
+        return None
+    try:
+        needle = normalize_evm_address(token_address)
+    except ValueError:
+        return None
+
+    doc = _cached_document()
+    chains = cast(dict[str, Any], doc["chains"])
+    block = chains.get(str(cid_int))
+    if not isinstance(block, dict):
+        return None
+
+    symbols = cast(dict[str, Any], block.get("tokens") or {})
+    for sym, row in symbols.items():
+        if not isinstance(row, dict):
+            continue
+        addr = row.get("address")
+        if not isinstance(addr, str):
+            continue
+        if normalize_evm_address(addr) == needle:
+            name = row.get("name")
+            return KnownToken(
+                symbol=str(sym),
+                address=needle,
+                name=str(name) if name is not None else str(sym),
+            )
+    return None
+
+
+def chain_slug_in_known_catalog(chain_slug: str) -> bool:
+    """True when ``chain_name_to_id`` lists this slug (curated chain for native gas)."""
+
+    doc = _cached_document()
+    mapping = doc.get("chain_name_to_id")
+    if not isinstance(mapping, dict):
+        return False
+    return chain_slug.strip().lower() in {str(k).strip().lower() for k in mapping}

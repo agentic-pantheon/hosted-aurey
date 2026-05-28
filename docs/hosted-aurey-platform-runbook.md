@@ -90,3 +90,17 @@ Once **`agent_api_key_encrypted`** is populated and/or vault PUT succeeded for a
 Bootstrap responses may include **`summary.signing_keys`** (Ethereum **`address`**). Aurey persists a checksummed **`wallet_address`** on `hosted_platform_users` when present and backfills via **`GET /v1/agents/{user_agent_id}/signing-keys`** during onboarding polling when the field is still empty.
 
 To force a refresh without waiting for Telegram traffic, POST **`/v1/hosted/sync-wallet`** with JSON `{"telegram_user_id": <id>}` and header **`Authorization: Bearer <AUREY_HOSTED_HTTP_ADMIN_TOKEN>`**. Operators generate this token deployment-wide (not per user); leaving it unset disables the endpoint (503). On success the handler updates **`wallet_address`** from 1Claw when the signing-keys payload includes an Ethereum key.
+
+## 9. Telegram portfolio Mini App (second Railway service)
+
+Phase 1 exposes read-only portfolio JSON (via **Zerion** wallet portfolio, fungible positions, and balance chart APIs) and a static Web App when **`AUREY_TELEGRAM_MINIAPP_ENABLED=true`**, **`AUREY_TELEGRAM_MINIAPP_PUBLIC_URL`** points at the HTTP service’s **`/miniapp/`** URL, and `miniapp/dist` is built during deploy.
+
+1. **Duplicate the environment** from the Telegram poller (1Claw bootstrap, vault-id, DB, `AUREY_HOSTED_PLATFORM_ENABLED`, Telegram bot token, **`AUREY_ZERION_API_KEY`**, etc.) onto a **second Railway service** rooted at the same repo.
+2. Configure that service’s **Railway config file** to **`railway.http.toml`** (Dashboard → service → Settings, or `RAILWAY_CONFIG_FILE` as applicable). The HTTP service runs `run_http.py` and serves both **`/v1/miniapp/*`** and **`/miniapp/`** static assets after `npm ci && npm run build` in `miniapp/`.
+3. Assign a **public HTTPS domain** to the HTTP service. Set **`AUREY_TELEGRAM_MINIAPP_PUBLIC_URL=https://<http-host>/miniapp/`** on **both** services: the Telegram worker needs this URL for `setChatMenuButton` and `/portfolio`.
+4. In **BotFather**, register the Mini App **domain** to match the HTTP service hostname.
+5. Keep the **polling** service on `run_telegram.py` (`railway.toml`); only one process may call `getUpdates` with a given bot token.
+
+When the Mini App is disabled, omit the flag or leave it `false`; the bot skips Web App wiring if the public URL is unset.
+
+**Security defaults (HTTP service):** `initData` max age **4h**; per-user / per-IP rate limits on `POST /v1/miniapp/portfolio`; **120s** server-side Zerion snapshot cache; portfolio reads do **not** trigger signing-keys backfill (use `/v1/hosted/sync-wallet` or Telegram onboarding instead). Tune via `AUREY_TELEGRAM_MINIAPP_*` env vars in `.env.example`.

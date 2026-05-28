@@ -93,6 +93,7 @@ def test_ensure_telegram_user_provisioned_rebootstraps_while_awaiting_claim() ->
         hosted_require_verified_email=False,
         platform_api_key="plt_fake",
         platform_template_id="tmpl_1",
+        hosted_operator_registration_notify_email=None,
     )
     session, engine = _memory_session()
     try:

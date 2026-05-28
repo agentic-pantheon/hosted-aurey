@@ -43,6 +43,8 @@ def test_telegram_chat_is_allowed_restricted() -> None:
     assert _telegram_chat_is_allowed(1, allowed) is True
     assert _telegram_chat_is_allowed(-100, allowed) is True
     assert _telegram_chat_is_allowed(999, allowed) is False
+    assert _telegram_chat_is_allowed(None, allowed, telegram_user_id=1) is True
+    assert _telegram_chat_is_allowed(999, allowed, telegram_user_id=1) is True
 
 
 def _simulate_telegram_progress_events(cb: TelegramInvokeProgressCallback) -> None:

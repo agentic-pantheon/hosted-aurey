@@ -302,6 +302,14 @@ class AureySettings(BaseSettings):
         ),
         validation_alias=AliasChoices("AUREY_LIFI_API_KEY"),
     )
+    zerion_api_key: str | None = Field(
+        default=None,
+        description=(
+            "Zerion API key for Telegram Mini App portfolio reads (``AUREY_ZERION_API_KEY``). "
+            "Required when ``telegram_miniapp_enabled`` serves live portfolio data."
+        ),
+        validation_alias=AliasChoices("AUREY_ZERION_API_KEY"),
+    )
     lifi_integrator: str = Field(
         default="aurey",
         description=(
@@ -344,6 +352,63 @@ class AureySettings(BaseSettings):
             "When set, other chats receive an access-request flow (email + handle) instead of "
             "the agent."
         ),
+    )
+    telegram_miniapp_enabled: bool = Field(
+        default=False,
+        description=(
+            "Expose ``/v1/miniapp/*`` and static ``/miniapp/`` when true. Requires hosted platform, "
+            "database, and Telegram bot token for ``initData`` validation."
+        ),
+    )
+    telegram_miniapp_public_url: str | None = Field(
+        default=None,
+        description=(
+            "Public HTTPS base URL of the Mini App (e.g. https://api.example.com/miniapp/) for "
+            "the bot menu button WebApp. Trailing slash optional."
+        ),
+    )
+    telegram_miniapp_default_chains: str | None = Field(
+        default=None,
+        description=(
+            "Comma/whitespace-separated chain slugs for Zerion ``filter[chain_ids]`` "
+            "(defaults to ethereum,base,arbitrum)."
+        ),
+    )
+    telegram_miniapp_initdata_max_age_seconds: int = Field(
+        default=14400,
+        ge=60,
+        le=604800,
+        description=(
+            "Reject Web App initData when auth_date is older than this many seconds "
+            "(default 4 hours)."
+        ),
+    )
+    telegram_miniapp_initdata_max_future_skew_seconds: int = Field(
+        default=60,
+        ge=0,
+        le=3600,
+        description="Reject initData when auth_date is more than this many seconds in the future.",
+    )
+    telegram_miniapp_portfolio_cache_ttl_seconds: int = Field(
+        default=120,
+        ge=0,
+        le=3600,
+        description=(
+            "Server-side TTL for cached Zerion portfolio snapshots per Telegram user "
+            "(0 disables server cache)."
+        ),
+    )
+    telegram_miniapp_portfolio_rate_limit_user_per_minute: int = Field(
+        default=24,
+        ge=1,
+        le=600,
+        description="Max ``POST /v1/miniapp/portfolio`` calls per Telegram user id per minute.",
+    )
+    telegram_miniapp_portfolio_rate_limit_ip_per_minute: int = Field(
+        default=90,
+        ge=1,
+        le=2000,
+        description="Max ``POST /v1/miniapp/portfolio`` calls per client IP per minute.",
     )
     llm_proxy: LlmProxyMode = Field(
         default="shroud",
@@ -404,7 +469,13 @@ class AureySettings(BaseSettings):
         s = str(v).strip()
         return s if s else None
 
-    @field_validator("alchemy_api_key", "lifi_api_key", "telegram_bot_token", mode="before")
+    @field_validator(
+        "alchemy_api_key",
+        "lifi_api_key",
+        "telegram_bot_token",
+        "zerion_api_key",
+        mode="before",
+    )
     @classmethod
     def _strip_optional_plaintext_api_credentials(cls, v: object) -> str | None:
         if v is None:
@@ -501,6 +572,29 @@ class AureySettings(BaseSettings):
         """Frozen set of allowed chat ids, or ``None`` when the bot accepts any chat."""
 
         return parse_telegram_allowed_chat_ids(self.telegram_allowed_chat_ids)
+
+    @property
+    def telegram_miniapp_default_chain_slugs(self) -> tuple[str, ...]:
+        """Alchemy chain slugs used by the portfolio Mini App when env override is unset."""
+
+        raw = (self.telegram_miniapp_default_chains or "").strip()
+        if not raw:
+            return ("ethereum", "base", "arbitrum")
+        out: list[str] = []
+        for token in _TELEGRAM_ALLOWLIST_SPLIT_RE.split(raw):
+            t = token.strip().lower()
+            if t:
+                out.append(t)
+        return tuple(out) if out else ("ethereum", "base", "arbitrum")
+
+    def telegram_miniapp_launch_url(self) -> str | None:
+        """Normalized Web App entry (``…/miniapp/``)."""
+
+        raw = (self.telegram_miniapp_public_url or "").strip()
+        if not raw:
+            return None
+        url = raw.rstrip("/") + "/"
+        return url
 
     @property
     def evm_signing_requires_wallet_signing_key_secret_path(self) -> bool:
