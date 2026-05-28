@@ -1,5 +1,6 @@
 [build]
-buildCommand = "cd miniapp && npm ci && npm run build && cd .. && uv sync --frozen --no-dev --extra api"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.http"
 
 [deploy]
-startCommand = "uv run python run_http.py --host 0.0.0.0 --port ${PORT:-8000}"
+# Start command is defined in Dockerfile.http (honours Railway PORT).
