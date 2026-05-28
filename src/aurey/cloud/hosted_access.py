@@ -134,6 +134,18 @@ def submit_telegram_access_request(
     return row
 
 
+def delete_telegram_access_request(
+    session: Session,
+    *,
+    telegram_user_id: int,
+) -> None:
+    """Remove stored beta access request after the user's chat is allowlisted."""
+
+    row = get_pending_access_request(session, telegram_user_id=telegram_user_id)
+    if row is not None:
+        session.delete(row)
+
+
 def telegram_access_request_intro_message(*, telegram_handle: str) -> str:
     return (
         "Aurey is in limited beta for approved chats only.\n\n"
@@ -146,7 +158,10 @@ def telegram_access_request_intro_message(*, telegram_handle: str) -> str:
 def telegram_access_request_pending_message() -> str:
     return (
         "Your access request is already on file. We'll reach out by email when you're "
-        "approved — no need to send another request."
+        "approved.\n\n"
+        "Once you're approved, send /start again in this chat — you don't need to delete "
+        "the conversation. If /start still shows this message, the server allowlist may "
+        "not include your Telegram chat id yet (ops adds it from the access-request email)."
     )
 
 
@@ -263,6 +278,7 @@ def telegram_access_request_flow_step(
 __all__ = [
     "HostedAccessRequestError",
     "clear_telegram_access_request_flow",
+    "delete_telegram_access_request",
     "format_telegram_handle",
     "get_pending_access_request",
     "mark_telegram_access_request_awaiting_email",

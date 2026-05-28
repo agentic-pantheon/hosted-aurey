@@ -26,18 +26,68 @@ class TelegramConfigurationError(RuntimeError):
     """Telegram setup failed without exposing token paths or values."""
 
 
-def _telegram_chat_is_allowed(chat_id: int | None, allowed: frozenset[int] | None) -> bool:
-    """When ``allowed`` is set, only listed chats may invoke the bot."""
+def _telegram_current_allowed_chat_ids(state: AureyServiceState) -> frozenset[int] | None:
+    """Read allowlist from settings on each update (ops may change env without rebuilding the app)."""
+
+    return state.settings.telegram_allowed_chat_id_allowlist
+
+
+def _telegram_chat_is_allowed(
+    chat_id: int | None,
+    allowed: frozenset[int] | None,
+    *,
+    telegram_user_id: int | None = None,
+) -> bool:
+    """When ``allowed`` is set, only listed chats may invoke the bot.
+
+    Private DM chat ids equal the user's Telegram id; operators sometimes add one or
+    the other to ``AUREY_TELEGRAM_ALLOWED_CHAT_IDS``, so either id matching the set
+    is treated as allowed.
+    """
 
     if allowed is None:
         return True
-    if chat_id is None:
-        return False
-    return chat_id in allowed
+    if chat_id is not None and chat_id in allowed:
+        return True
+    if telegram_user_id is not None and telegram_user_id in allowed:
+        return True
+    return False
 
 
 def _telegram_chat_allowlist_enforced(allowed: frozenset[int] | None) -> bool:
     return allowed is not None
+
+
+async def _telegram_clear_access_request_after_allowlist(
+    state: AureyServiceState,
+    *,
+    telegram_user_id: int,
+    user_data: dict[str, object],
+) -> None:
+    """Drop beta access-request state once the user is on the allowlist."""
+
+    from aurey.cloud.hosted_access import (
+        clear_telegram_access_request_flow,
+        delete_telegram_access_request,
+    )
+
+    clear_telegram_access_request_flow(user_data)
+    factory = state.hosted_session_factory
+    if factory is None:
+        return
+
+    def _delete_sync() -> None:
+        db = factory()
+        try:
+            delete_telegram_access_request(db, telegram_user_id=telegram_user_id)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    await asyncio.to_thread(_delete_sync)
 
 
 async def _telegram_handle_disallowed_chat_access_request(
@@ -45,7 +95,6 @@ async def _telegram_handle_disallowed_chat_access_request(
     context: object,
     *,
     state: AureyServiceState,
-    allowed_chats: frozenset[int] | None,
     message_text: str | None,
 ) -> bool:
     """Run beta access-request flow when chat is outside ``AUREY_TELEGRAM_ALLOWED_CHAT_IDS``.
@@ -53,6 +102,7 @@ async def _telegram_handle_disallowed_chat_access_request(
     Returns ``True`` when the update was handled (caller should return).
     """
 
+    allowed_chats = _telegram_current_allowed_chat_ids(state)
     if not _telegram_chat_allowlist_enforced(allowed_chats):
         return False
 
@@ -64,16 +114,21 @@ async def _telegram_handle_disallowed_chat_access_request(
     chat = update.effective_chat
     chat_id_raw = getattr(chat, "id", None)
     cid_opt = int(chat_id_raw) if chat_id_raw is not None else None
-    if _telegram_chat_is_allowed(cid_opt, allowed_chats):
-        return False
-
     msg = update.effective_message
     user = update.effective_user
     tid_raw = getattr(user, "id", None)
+    tid_opt = int(tid_raw) if tid_raw is not None else None
+    if _telegram_chat_is_allowed(
+        cid_opt,
+        allowed_chats,
+        telegram_user_id=tid_opt,
+    ):
+        return False
+
     if msg is None or tid_raw is None:
         return True
 
-    user_data: dict[str, object] = getattr(context, "user_data", {}) or {}
+    user_data = getattr(context, "user_data", {}) or {}
 
     from aurey.cloud.hosted_access import telegram_access_request_flow_step
 
@@ -483,7 +538,11 @@ async def _telegram_end_typing_pump(
     await typing_task
 
 
-def _telegram_bot_command_menu(*, hosted_email_onboarding: bool) -> list[Any]:
+def _telegram_bot_command_menu(
+    *,
+    hosted_email_onboarding: bool,
+    miniapp_portfolio: bool = False,
+) -> list[Any]:
     """Menu entries for Telegram ``setMyCommands`` (BotCommand objects)."""
 
     from telegram import BotCommand
@@ -492,6 +551,8 @@ def _telegram_bot_command_menu(*, hosted_email_onboarding: bool) -> list[Any]:
         BotCommand("start", "Set up or refresh your Aurey / Claim credentials and wallet"),
         BotCommand("help", "Show available commands"),
     ]
+    if miniapp_portfolio:
+        cmds.append(BotCommand("portfolio", "Open portfolio Web App"))
     if hosted_email_onboarding:
         cmds.append(
             BotCommand("cancel", "Cancel in-progress email verification and start over"),
@@ -499,7 +560,11 @@ def _telegram_bot_command_menu(*, hosted_email_onboarding: bool) -> list[Any]:
     return cmds
 
 
-def _telegram_help_message_html(*, hosted_email_onboarding: bool) -> str:
+def _telegram_help_message_html(
+    *,
+    hosted_email_onboarding: bool,
+    miniapp_portfolio: bool = False,
+) -> str:
     lines = [
         "<b>Aurey commands</b>",
         "",
@@ -507,6 +572,10 @@ def _telegram_help_message_html(*, hosted_email_onboarding: bool) -> str:
         "fresh credentials and wallet claim link by email (if yours expired).",
         "<b>/help</b> — Show this list.",
     ]
+    if miniapp_portfolio:
+        lines.extend(
+            ["<b>/portfolio</b> — Open the visual portfolio Web App (balances, DeFi)."],
+        )
     if hosted_email_onboarding:
         lines.extend(
             [
@@ -821,33 +890,19 @@ def hosted_invoke_bundle_for_telegram_user(
     if factory is None:
         return None, extras
 
-    from sqlalchemy import select
-
-    from aurey.cloud.models import HostedPlatformUserORM
+    from aurey.cloud.hosted_wallet_lookup import load_hosted_platform_user_row_for_telegram
 
     tid = int(telegram_user_id)
     db = factory()
     try:
-        row = db.scalar(
-            select(HostedPlatformUserORM).where(HostedPlatformUserORM.telegram_user_id == tid),
+        row = load_hosted_platform_user_row_for_telegram(
+            db,
+            cfg,
+            telegram_user_id=tid,
+            reason="telegram_invoke",
         )
         if row is None:
             return None, extras
-        if not (row.wallet_address or "").strip() and (row.user_agent_id or "").strip():
-            from aurey.cloud.platform_client import OneClawPlatformClient
-            from aurey.cloud.wallet_sync import maybe_backfill_wallet_from_signing_keys
-
-            try:
-                plat = OneClawPlatformClient.from_settings(cfg)
-                maybe_backfill_wallet_from_signing_keys(
-                    db,
-                    plat,
-                    row,
-                    reason="telegram_invoke",
-                )
-                db.commit()
-            except Exception:
-                db.rollback()
         wa_raw = (row.wallet_address or "").strip()
         if wa_raw:
             try:
@@ -959,7 +1014,6 @@ def build_telegram_application(
         filters,
     ) = _import_telegram_ext()
     bot_token = token or resolve_telegram_bot_token(state)
-    allowed_chats = state.settings.telegram_allowed_chat_id_allowlist
     gate_log = logging.getLogger("aurey.telegram.bot")
 
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -969,10 +1023,16 @@ def build_telegram_application(
             update,
             context,
             state=state,
-            allowed_chats=allowed_chats,
             message_text=None,
         ):
             return
+        tid_clear = getattr(update.effective_user, "id", None)
+        if tid_clear is not None:
+            await _telegram_clear_access_request_after_allowlist(
+                state,
+                telegram_user_id=int(tid_clear),
+                user_data=getattr(context, "user_data", {}) or {},
+            )
         cid_opt = int(chat_id_raw) if chat_id_raw is not None else None
         msg = update.effective_message
         if msg is None:
@@ -1207,7 +1267,6 @@ def build_telegram_application(
             update,
             context,
             state=state,
-            allowed_chats=allowed_chats,
             message_text=msg.text,
         ):
             return
@@ -1355,7 +1414,6 @@ def build_telegram_application(
             update,
             context,
             state=state,
-            allowed_chats=allowed_chats,
             message_text=None,
         ):
             return
@@ -1368,9 +1426,45 @@ def build_telegram_application(
             and (cfg.database_url or "").strip()
             and cfg.hosted_require_verified_email
         )
+        miniapp_pf = bool(cfg.telegram_miniapp_enabled and cfg.telegram_miniapp_launch_url())
         await msg.reply_text(
-            _telegram_help_message_html(hosted_email_onboarding=hosted_email),
+            _telegram_help_message_html(
+                hosted_email_onboarding=hosted_email,
+                miniapp_portfolio=miniapp_pf,
+            ),
             parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def portfolio_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat = update.effective_chat
+        chat_id_raw = getattr(chat, "id", None)
+        if await _telegram_handle_disallowed_chat_access_request(
+            update,
+            context,
+            state=state,
+            message_text=None,
+        ):
+            return
+        msg = update.effective_message
+        if msg is None:
+            return
+        cfg = state.settings
+        if not cfg.telegram_miniapp_enabled:
+            await msg.reply_text("Portfolio Web App is disabled on this deployment.")
+            return
+        url = cfg.telegram_miniapp_launch_url()
+        if not url:
+            await msg.reply_text("Portfolio Web App URL is not configured (operator).")
+            return
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("Open portfolio", web_app=WebAppInfo(url=url))]]
+        )
+        await msg.reply_text(
+            "Open your portfolio balances and DeFi positions in the Web App:",
+            reply_markup=keyboard,
             disable_web_page_preview=True,
         )
 
@@ -1381,13 +1475,19 @@ def build_telegram_application(
         chat = update.effective_chat
         chat_id_raw = getattr(chat, "id", None)
         cid_opt = int(chat_id_raw) if chat_id_raw is not None else None
-        if not _telegram_chat_is_allowed(cid_opt, allowed_chats):
+        user = update.effective_user
+        uid_raw = getattr(user, "id", None)
+        uid_opt = int(uid_raw) if uid_raw is not None else None
+        allowed = _telegram_current_allowed_chat_ids(state)
+        if not _telegram_chat_is_allowed(
+            cid_opt,
+            allowed,
+            telegram_user_id=uid_opt,
+        ):
             return
         msg = update.effective_message
         if msg is None:
             return
-        user = update.effective_user
-        uid_raw = getattr(user, "id", None)
         if uid_raw is None:
             await msg.reply_text("Could not read your Telegram user id.")
             return
@@ -1409,14 +1509,35 @@ def build_telegram_application(
         and (state.settings.database_url or "").strip()
         and state.settings.hosted_require_verified_email
     )
+    miniapp_portfolio_cmds = bool(
+        state.settings.telegram_miniapp_enabled
+        and bool(state.settings.telegram_miniapp_launch_url())
+    )
 
     async def _register_bot_commands(application: Application) -> None:
         try:
             await application.bot.set_my_commands(
-                _telegram_bot_command_menu(hosted_email_onboarding=hosted_email_onboarding),
+                _telegram_bot_command_menu(
+                    hosted_email_onboarding=hosted_email_onboarding,
+                    miniapp_portfolio=miniapp_portfolio_cmds,
+                ),
             )
         except Exception:
             gate_log.warning("Could not register Telegram bot commands menu", exc_info=True)
+
+        mini_url = state.settings.telegram_miniapp_launch_url()
+        if state.settings.telegram_miniapp_enabled and mini_url:
+            try:
+                from telegram import MenuButtonWebApp, WebAppInfo
+
+                await application.bot.set_chat_menu_button(
+                    menu_button=MenuButtonWebApp(
+                        text="Portfolio",
+                        web_app=WebAppInfo(url=mini_url),
+                    ),
+                )
+            except Exception:
+                gate_log.warning("Could not set Telegram Web App menu button", exc_info=True)
 
     app = (
         Application.builder()
@@ -1426,6 +1547,7 @@ def build_telegram_application(
     )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("portfolio", portfolio_cmd))
     app.add_handler(CommandHandler("cancel", cancel_hosted))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
 

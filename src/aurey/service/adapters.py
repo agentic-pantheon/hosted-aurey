@@ -26,6 +26,7 @@ class UrllibHttpJsonClient(HttpJsonPort):
         json_body: dict[str, Any] | list[Any] | None = None,
     ) -> dict[str, Any] | list[Any]:
         hdrs = dict(headers or {})
+        hdrs.setdefault("User-Agent", "Aurey/1.0")
         data: bytes | None = None
         if json_body is not None:
             hdrs.setdefault("Content-Type", "application/json")

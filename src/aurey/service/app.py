@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
 
+from aurey.miniapp.schemas import PortfolioSnapshot
 from aurey.service.bootstrap import AureyServiceBootstrapError, bootstrap_aurey_service_state
 from aurey.service.dependencies import get_aurey_service_state
 from aurey.service.invoke import AgentInvokeError, AgentInvokeResult, invoke_deep_agent_turn
@@ -50,6 +52,16 @@ class HostedSyncWalletResponse(BaseModel):
     wallet_address: str | None = None
 
 
+class MiniAppPortfolioRequest(BaseModel):
+    """Telegram WebApp ``initData`` payload (query string form, not JSON)."""
+
+    init_data: str = Field(..., min_length=1, description="Telegram.WebApp.initData string.")
+
+
+class MiniAppConfigResponse(BaseModel):
+    chains: list[str]
+
+
 def _hosted_http_bearer_matches_configured(admin_token: str, authorization_header: str | None) -> bool:
     ct = admin_token.strip()
     if not ct or authorization_header is None:
@@ -62,6 +74,33 @@ def _hosted_http_bearer_matches_configured(admin_token: str, authorization_heade
         hashlib.sha256(ct.encode("utf-8")).digest(),
         hashlib.sha256(got.encode("utf-8")).digest(),
     )
+
+
+def _miniapp_dist_dir() -> Path:
+    """Repository ``miniapp/dist`` (sibling of ``src``)."""
+
+    return Path(__file__).resolve().parents[3] / "miniapp" / "dist"
+
+
+def _miniapp_rate_limiters(app: Any, st: AureySettings) -> tuple[Any, Any]:
+    from aurey.miniapp.rate_limit import SlidingWindowRateLimiter
+
+    key_user = (
+        st.telegram_miniapp_portfolio_rate_limit_user_per_minute,
+        st.telegram_miniapp_portfolio_rate_limit_ip_per_minute,
+    )
+    cached = getattr(app.state, "_miniapp_rl_key", None)
+    if cached != key_user or not hasattr(app.state, "miniapp_rl_user"):
+        app.state._miniapp_rl_key = key_user
+        app.state.miniapp_rl_user = SlidingWindowRateLimiter(
+            max_events=st.telegram_miniapp_portfolio_rate_limit_user_per_minute,
+            window_seconds=60.0,
+        )
+        app.state.miniapp_rl_ip = SlidingWindowRateLimiter(
+            max_events=st.telegram_miniapp_portfolio_rate_limit_ip_per_minute,
+            window_seconds=60.0,
+        )
+    return app.state.miniapp_rl_user, app.state.miniapp_rl_ip
 
 
 def create_fastapi_application(
@@ -177,6 +216,126 @@ def create_fastapi_application(
         finally:
             db.close()
 
+    @app.get("/v1/miniapp/config", response_model=MiniAppConfigResponse)
+    def miniapp_config(request: Request) -> MiniAppConfigResponse:
+        svc = get_aurey_service_state(request)
+        if svc is None:
+            raise HTTPException(status_code=503, detail={"code": "service_unavailable"})
+        if not svc.settings.telegram_miniapp_enabled:
+            raise HTTPException(status_code=503, detail={"code": "miniapp_disabled"})
+        return MiniAppConfigResponse(
+            chains=list(svc.settings.telegram_miniapp_default_chain_slugs),
+        )
+
+    @app.post("/v1/miniapp/portfolio", response_model=PortfolioSnapshot)
+    def miniapp_portfolio_post(
+        request: Request,
+        body: MiniAppPortfolioRequest,
+    ) -> PortfolioSnapshot:
+        from aurey.miniapp.http_helpers import client_ip_from_request
+        from aurey.miniapp.portfolio import aggregate_portfolio_snapshot
+        from aurey.miniapp.portfolio_cache_server import portfolio_snapshot_cache
+        from aurey.miniapp.wallet import resolve_wallet_for_telegram_user
+        from aurey.telegram.client import (
+            TelegramConfigurationError,
+            resolve_telegram_bot_token,
+        )
+        from aurey.telegram.webapp_auth import (
+            TelegramWebAppAuthError,
+            validate_telegram_webapp_init_data,
+        )
+
+        svc = get_aurey_service_state(request)
+        if svc is None:
+            raise HTTPException(status_code=503, detail={"code": "service_unavailable"})
+        st = svc.settings
+        if not st.telegram_miniapp_enabled:
+            raise HTTPException(status_code=503, detail={"code": "miniapp_disabled"})
+        if not st.hosted_platform_enabled:
+            raise HTTPException(status_code=403, detail={"code": "hosted_disabled"})
+
+        allow = st.telegram_allowed_chat_id_allowlist
+        try:
+            bot_token = resolve_telegram_bot_token(svc)
+        except TelegramConfigurationError:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "telegram_token_unavailable"},
+            ) from None
+
+        try:
+            web_user = validate_telegram_webapp_init_data(
+                init_data_raw=body.init_data,
+                bot_token=bot_token,
+                max_age_seconds=st.telegram_miniapp_initdata_max_age_seconds,
+                max_future_skew_seconds=st.telegram_miniapp_initdata_max_future_skew_seconds,
+            )
+        except TelegramWebAppAuthError as exc:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+
+        if allow is not None and web_user.telegram_user_id not in allow:
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "telegram_user_not_allowlisted"},
+            )
+
+        rl_user, rl_ip = _miniapp_rate_limiters(request.app, st)
+        client_ip = client_ip_from_request(request)
+        if not rl_user.allow(f"uid:{web_user.telegram_user_id}"):
+            raise HTTPException(
+                status_code=429,
+                detail={"code": "rate_limited_user", "message": "Too many portfolio requests."},
+            )
+        if not rl_ip.allow(f"ip:{client_ip}"):
+            raise HTTPException(
+                status_code=429,
+                detail={"code": "rate_limited_ip", "message": "Too many portfolio requests."},
+            )
+
+        resolved = resolve_wallet_for_telegram_user(svc, telegram_user_id=web_user.telegram_user_id)
+        if not resolved.has_row:
+            raise HTTPException(status_code=403, detail={"code": "hosted_user_not_found"})
+        if not resolved.wallet_address:
+            raise HTTPException(status_code=403, detail={"code": "wallet_not_ready"})
+
+        chains = st.telegram_miniapp_default_chain_slugs
+        cache_ttl = st.telegram_miniapp_portfolio_cache_ttl_seconds
+        if cache_ttl > 0 and resolved.wallet_address:
+            cache_key = portfolio_snapshot_cache.cache_key(
+                telegram_user_id=web_user.telegram_user_id,
+                wallet_address=resolved.wallet_address,
+                chains=chains,
+            )
+            cached = portfolio_snapshot_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        snapshot = aggregate_portfolio_snapshot(
+            svc.runtime,
+            wallet_address=resolved.wallet_address,
+            chains=chains,
+        )
+        if cache_ttl > 0 and resolved.wallet_address:
+            portfolio_snapshot_cache.set(
+                cache_key,
+                snapshot,
+                ttl_seconds=float(cache_ttl),
+            )
+        return snapshot
+
+    dist = _miniapp_dist_dir()
+    if dist.is_dir():
+        from starlette.staticfiles import StaticFiles
+
+        app.mount(
+            "/miniapp",
+            StaticFiles(directory=str(dist), html=True),
+            name="miniapp_static",
+        )
+
     return app
 
 
@@ -196,6 +355,9 @@ __all__ = [
     "InvokeBody",
     "InvokeError",
     "InvokeResponse",
+    "MiniAppConfigResponse",
+    "MiniAppPortfolioRequest",
+    "PortfolioSnapshot",
     "app",
     "create_default_application",
     "create_fastapi_application",
