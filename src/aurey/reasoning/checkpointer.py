@@ -22,10 +22,16 @@ class ManagedPostgresCheckpointer:
     """Postgres-backed LangGraph saver plus context manager for teardown."""
 
     saver: BaseCheckpointSaver
-    _cm: AbstractContextManager[Any]
+    _cm: AbstractContextManager[Any] | None
+    _pool: Any | None = None
 
     def close(self) -> None:
-        self._cm.__exit__(None, None, None)
+        if self._pool is not None:
+            self._pool.close()
+            self._pool = None
+        if self._cm is not None:
+            self._cm.__exit__(None, None, None)
+            self._cm = None
 
 
 def _conn_string_for_langgraph_raw_psycopg(conn_str: str) -> str:
@@ -46,19 +52,37 @@ def _conn_string_for_langgraph_raw_psycopg(conn_str: str) -> str:
     return url
 
 
-def open_postgres_checkpointer(conn_str: str) -> ManagedPostgresCheckpointer:
-    """Open ``PostgresSaver`` from URI, run ``setup()`` for DDL, return a closable handle."""
+def open_postgres_checkpointer(
+    conn_str: str,
+    *,
+    min_size: int = 1,
+    max_size: int = 10,
+) -> ManagedPostgresCheckpointer:
+    """Open ``PostgresSaver`` from a connection pool, run ``setup()`` for DDL."""
 
     from langgraph.checkpoint.postgres import PostgresSaver
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
 
-    cm = PostgresSaver.from_conn_string(_conn_string_for_langgraph_raw_psycopg(conn_str))
-    saver = cm.__enter__()
+    conninfo = _conn_string_for_langgraph_raw_psycopg(conn_str)
+    pool = ConnectionPool(
+        conninfo=conninfo,
+        min_size=min_size,
+        max_size=max_size,
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": 0,
+            "row_factory": dict_row,
+        },
+        open=True,
+    )
+    saver = PostgresSaver(pool)
     try:
         saver.setup()
     except BaseException:
-        cm.__exit__(*sys.exc_info())
+        pool.close()
         raise
-    return ManagedPostgresCheckpointer(saver=saver, _cm=cm)
+    return ManagedPostgresCheckpointer(saver=saver, _cm=None, _pool=pool)
 
 
 def thread_config(session_id: str, **extra: Any) -> dict[str, Any]:

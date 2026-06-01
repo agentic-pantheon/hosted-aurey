@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from threading import Lock
 from time import monotonic
@@ -14,6 +13,7 @@ from aurey.custody import OneClawEvmTransactionSigner
 from aurey.custody.secret_store import SecretStore
 from aurey.graphs.ports import EvmJsonRpcPort, HttpJsonPort, TxPipelinePort
 from aurey.settings import AureySettings
+from aurey.util.ttl_lru_cache import TtlLruCache
 
 PreparedPayloadKind = Literal["execute_envelope", "lifi_prepared"]
 
@@ -81,6 +81,10 @@ class PreparedTransactionStore:
             self._records.pop(pid, None)
 
 
+def _default_decimals_cache() -> TtlLruCache[tuple[str, str], int]:
+    return TtlLruCache(maxsize=2048, ttl_s=86400.0)
+
+
 @dataclass(frozen=True)
 class AureyRuntime:
     """Process-level dependencies; secret values are revealed only inside graph nodes."""
@@ -93,5 +97,6 @@ class AureyRuntime:
     oneclaw_evm_signer: OneClawEvmTransactionSigner | None = None
     lifi_base_url: str = "https://li.quest"
     prepared_txs: PreparedTransactionStore = field(default_factory=PreparedTransactionStore)
+    decimals_cache: TtlLruCache[tuple[str, str], int] = field(default_factory=_default_decimals_cache)
     token_resolver: "TokenResolver | None" = None
     hosted_session_factory: Callable[..., Any] | None = None

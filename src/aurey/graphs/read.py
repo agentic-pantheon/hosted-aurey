@@ -8,6 +8,10 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
 from aurey.graphs.api_key_resolution import effective_alchemy_api_key
+from aurey.graphs.cached_decimals import (
+    fetch_erc20_decimals_and_balance_raw,
+    get_cached_erc20_decimals,
+)
 from aurey.graphs.chains import alchemy_rpc_url_for_chain, chain_id_for, chain_info
 from aurey.graphs.ens_eth import (
     ENS_REGISTRY_MAINNET,
@@ -19,9 +23,6 @@ from aurey.graphs.ens_eth import (
     normalize_ens_query_name,
 )
 from aurey.graphs.evm_codec import (
-    ERC20_DECIMALS_CALLDATA,
-    decode_abi_uint256_word,
-    erc20_balance_of_calldata,
     format_token_units,
     normalize_evm_address,
     parse_evm_uint,
@@ -33,15 +34,15 @@ from aurey.graphs.results import (
     GraphErrorBody,
     KnownAddressResult,
     NativeBalanceResult,
+    SupportedSymbolGroup,
     SupportedTokenChainRef,
     SupportedTokenEntry,
     SupportedTokensGroupedResult,
     SupportedTokensOnChainResult,
-    SupportedSymbolGroup,
 )
-from aurey.token_registry.catalog import list_grouped_by_symbol, list_on_chain
 from aurey.known_addresses.book import lookup_known_token, lookup_known_token_by_name
 from aurey.runtime import AureyRuntime
+from aurey.token_registry.catalog import list_grouped_by_symbol, list_on_chain
 
 
 class ReadGraphInput(BaseModel):
@@ -96,8 +97,20 @@ def _alchemy_rpc_or_error(
 
 class ReadGraphState(TypedDict, total=False):
     input: dict[str, Any]
+    parsed: dict[str, Any]
     error: dict[str, Any]
     result: dict[str, Any]
+
+
+def _validate_ok(parsed: ReadGraphInput) -> ReadGraphState:
+    return {"parsed": parsed.model_dump()}
+
+
+def _load_parsed_input(state: ReadGraphState) -> ReadGraphInput:
+    raw = state.get("parsed")
+    if isinstance(raw, dict):
+        return ReadGraphInput.model_validate(raw)
+    return ReadGraphInput.model_validate(state["input"])
 
 
 def _validation_error(exc: ValidationError) -> dict[str, Any]:
@@ -133,7 +146,7 @@ def _validate_node(state: ReadGraphState) -> ReadGraphState:
                     details={"chain": parsed.chain.strip()},
                 ).model_dump()
             }
-        return {}
+        return _validate_ok(parsed)
 
     if parsed.operation == "list_supported_tokens":
         target = (parsed.list_supported_chain or "").strip().lower()
@@ -144,7 +157,7 @@ def _validate_node(state: ReadGraphState) -> ReadGraphState:
                     message=f"Unsupported chain '{target}'.",
                 ).model_dump()
             }
-        return {}
+        return _validate_ok(parsed)
 
     if chain_info(chain) is None:
         return {
@@ -244,14 +257,14 @@ def _validate_node(state: ReadGraphState) -> ReadGraphState:
                 ).model_dump()
             }
 
-    return {}
+    return _validate_ok(parsed)
 
 
 def _execute_node(runtime: AureyRuntime, state: ReadGraphState) -> ReadGraphState:
     if state.get("error"):
         return {}
 
-    parsed = ReadGraphInput.model_validate(state["input"])
+    parsed = _load_parsed_input(state)
     chain = parsed.chain.strip().lower()
 
     if parsed.operation == "ens_resolve":
@@ -532,22 +545,15 @@ def _execute_node(runtime: AureyRuntime, state: ReadGraphState) -> ReadGraphStat
                 ).model_dump()
             }
         try:
-            raw_decimals = rpc.call(
-                "eth_call",
-                [{"to": token, "data": ERC20_DECIMALS_CALLDATA}, "latest"],
+            decimals, balance_raw = fetch_erc20_decimals_and_balance_raw(
+                runtime,
+                chain_slug=chain,
+                token_address=token,
+                wallet_address=wallet,
+                rpc=rpc,
             )
-            if not isinstance(raw_decimals, str):
-                raise TypeError("unexpected eth_call result type")
-            decimals = decode_abi_uint256_word(raw_decimals)
-            if decimals > 255:
-                raise ValueError("decimals out of range")
-            raw_balance = rpc.call(
-                "eth_call",
-                [{"to": token, "data": erc20_balance_of_calldata(wallet)}, "latest"],
-            )
-            if not isinstance(raw_balance, str):
-                raise TypeError("unexpected eth_call result type")
-            balance_raw = decode_abi_uint256_word(raw_balance)
+            if decimals is None or balance_raw is None:
+                raise ValueError("could not decode balance or decimals")
         except ValueError:
             return {
                 "error": GraphErrorBody(
@@ -582,35 +588,27 @@ def _execute_node(runtime: AureyRuntime, state: ReadGraphState) -> ReadGraphStat
         if err_body is not None:
             return {"error": err_body}
         token = normalize_evm_address(parsed.token_address or "")
-        try:
-            raw = rpc.call(
-                "eth_call",
-                [{"to": token, "data": ERC20_DECIMALS_CALLDATA}, "latest"],
-            )
-            if not isinstance(raw, str):
-                raise TypeError("unexpected eth_call result type")
-            value = decode_abi_uint256_word(raw)
-            if value > 255:
-                return {
-                    "error": GraphErrorBody(
-                        code="rpc_error",
-                        message="Token decimals() value is outside the 0-255 range.",
-                        details={"token_address": token},
-                    ).model_dump()
-                }
-        except ValueError:
-            return {
-                "error": GraphErrorBody(
-                    code="rpc_error",
-                    message="Could not decode decimals() eth_call result.",
-                    details={"token_address": token},
-                ).model_dump()
-            }
-        except Exception:
+        dec_val = get_cached_erc20_decimals(
+            runtime,
+            chain_slug=chain,
+            token_address=token,
+            rpc=rpc,
+        )
+        if dec_val is None:
             return {
                 "error": GraphErrorBody(
                     code="rpc_error",
                     message="RPC eth_call for ERC-20 decimals() failed.",
+                    details={"token_address": token},
+                ).model_dump()
+            }
+        value = dec_val
+        if value > 255:
+            return {
+                "error": GraphErrorBody(
+                    code="rpc_error",
+                    message="Token decimals() value is outside the 0-255 range.",
+                    details={"token_address": token},
                 ).model_dump()
             }
 

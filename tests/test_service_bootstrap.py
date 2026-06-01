@@ -75,7 +75,7 @@ def test_bootstrap_hosted_attaches_session_factory(monkeypatch):
 
     monkeypatch.setattr("aurey.cloud.session.make_engine", fake_make_engine)
 
-    def fake_open(url: str) -> ManagedPostgresCheckpointer:
+    def fake_open(url: str, *, min_size: int = 1, max_size: int = 10) -> ManagedPostgresCheckpointer:
         _ = url
         cm = MagicMock()
         cm.__exit__ = MagicMock(return_value=False)
@@ -118,7 +118,7 @@ def test_bootstrap_uses_postgres_when_database_url(monkeypatch):
     monkeypatch.setenv("AUREY_ONECLAW_BOOTSTRAP_API_KEY", "k")
     opened: list[str] = []
 
-    def fake_open(url: str) -> ManagedPostgresCheckpointer:
+    def fake_open(url: str, *, min_size: int = 1, max_size: int = 10) -> ManagedPostgresCheckpointer:
         opened.append(url)
         cm = MagicMock()
         cm.__exit__ = MagicMock(return_value=False)

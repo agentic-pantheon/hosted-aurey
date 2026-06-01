@@ -567,6 +567,24 @@
     "title": "EvmResolveEnsArgs",
     "type": "object"
   },
+  "get_hosted_wallet_addresses": {
+    "description": "Hosted Telegram user's provisioned chain addresses from Postgres / Platform signing-keys.",
+    "properties": {
+      "chain": {
+        "default": "all",
+        "description": "Which address to return: ethereum (EVM), solana, or all.",
+        "enum": [
+          "ethereum",
+          "solana",
+          "all"
+        ],
+        "title": "Chain",
+        "type": "string"
+      }
+    },
+    "title": "GetHostedWalletAddressesArgs",
+    "type": "object"
+  },
   "lifi_get_status": {
     "description": "``GET /v1/status`` on ``runtime.lifi_base_url``.\n\nOptional ``x-lifi-api-key`` from env or vault path in settings.",
     "properties": {

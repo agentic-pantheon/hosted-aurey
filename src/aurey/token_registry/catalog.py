@@ -36,20 +36,24 @@ def _merge_key(row: TokenRow) -> tuple[str, str]:
 def collect_allowlist_rows(
     *,
     repository: TokenRegistryRepository | None,
+    chain_slug: str | None = None,
 ) -> list[TokenRow]:
     """Allowlist rows from DB (LiFi catalog) when connected; else bundled JSON fallback."""
 
     if repository is not None:
         return [
             r
-            for r in repository.list_allowlist_rows()
+            for r in repository.list_allowlist_rows(chain_slug=chain_slug)
             if r.trust_tier in _ALLOWLIST_TIERS
         ]
 
     merged: dict[tuple[str, str], TokenRow] = {}
-    for chain_slug, symbol, name, address in iter_catalog_tokens():
-        merged[_merge_key(_row_from_bundled(chain_slug, symbol, name, address))] = _row_from_bundled(
-            chain_slug, symbol, name, address
+    slug_filter = chain_slug.strip().lower() if chain_slug else None
+    for chain_slug_row, symbol, name, address in iter_catalog_tokens():
+        if slug_filter is not None and chain_slug_row != slug_filter:
+            continue
+        merged[_merge_key(_row_from_bundled(chain_slug_row, symbol, name, address))] = _row_from_bundled(
+            chain_slug_row, symbol, name, address
         )
     return list(merged.values())
 
@@ -60,7 +64,7 @@ def list_on_chain(
     chain_slug: str,
 ) -> list[TokenRow]:
     slug = chain_slug.strip().lower()
-    rows = [r for r in collect_allowlist_rows(repository=repository) if r.chain_slug == slug]
+    rows = collect_allowlist_rows(repository=repository, chain_slug=slug)
     rows.sort(key=lambda r: (r.symbol.upper(), r.trust_tier != "curated"))
     return rows
 

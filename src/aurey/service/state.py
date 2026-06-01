@@ -51,6 +51,7 @@ class AureyServiceState:
     _lock: Lock = field(default_factory=Lock)
     _postgres: ManagedPostgresCheckpointer | None = field(default=None, repr=False)
     _hosted_engine: Any | None = field(default=None, repr=False)
+    _httpx_client: Any | None = field(default=None, repr=False)
 
     def close_checkpointer(self) -> None:
         """Release Postgres pool/connection manager if this process opened one.
@@ -64,6 +65,9 @@ class AureyServiceState:
         if self._hosted_engine is not None:
             self._hosted_engine.dispose()
             self._hosted_engine = None
+        if self._httpx_client is not None:
+            self._httpx_client.close()
+            self._httpx_client = None
 
     def get_or_create_graph(
         self,

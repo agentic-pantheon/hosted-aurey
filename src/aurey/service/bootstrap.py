@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from aurey.custody.caching_secret_store import CachingSecretStore
 from aurey.custody.secret_store import OneClawHttpClient, OneClawSecretStore
 from aurey.graphs.evm_tx_pipeline import Web3TxPipeline
 from aurey.reasoning.checkpointer import (
@@ -9,9 +10,10 @@ from aurey.reasoning.checkpointer import (
     open_postgres_checkpointer,
 )
 from aurey.runtime import AureyRuntime
-from aurey.service.adapters import UrllibHttpJsonClient, make_evm_rpc_factory
+from aurey.service.adapters import HttpxJsonClient, make_evm_rpc_factory, make_shared_httpx_client
 from aurey.service.state import AureyServiceState
 from aurey.settings import AureySettings
+from aurey.util.ttl_lru_cache import TtlLruCache
 
 
 class AureyServiceBootstrapError(RuntimeError):
@@ -81,15 +83,28 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
         hosted_settings_for_ocv=s if s.hosted_platform_enabled else None,
     )
     store = OneClawSecretStore(client=client, vault_id=vault_id, agent_id=s.oneclaw_agent_id)
+    secret_store = store
+    ttl = float(s.secret_cache_ttl_seconds)
+    if ttl > 0:
+        secret_store = CachingSecretStore(store, ttl_s=ttl)
+
+    httpx_client = make_shared_httpx_client()
+    http_adapter = HttpxJsonClient(httpx_client)
+
+    decimals_cache = TtlLruCache[tuple[str, str], int](
+        maxsize=s.token_decimals_cache_maxsize,
+        ttl_s=max(s.token_decimals_cache_ttl_seconds, 1.0),
+    )
 
     runtime = AureyRuntime(
         settings=s,
-        secret_store=store,
-        evm_rpc_factory=make_evm_rpc_factory(),
-        http=UrllibHttpJsonClient(),
-        tx_pipeline=Web3TxPipeline(settings=s, secret_store=store),
+        secret_store=secret_store,
+        evm_rpc_factory=make_evm_rpc_factory(httpx_client),
+        http=http_adapter,
+        tx_pipeline=Web3TxPipeline(settings=s, secret_store=secret_store),
         oneclaw_evm_signer=client,
         hosted_session_factory=None,
+        decimals_cache=decimals_cache,
     )
 
     default_model = (s.deep_agent_default_model or "").strip() or "openai:gpt-4o-mini"
@@ -97,7 +112,11 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
     db_url = (s.database_url or "").strip()
     if db_url:
         try:
-            pg = open_postgres_checkpointer(db_url)
+            pg = open_postgres_checkpointer(
+                db_url,
+                min_size=s.db_pool_min_size,
+                max_size=s.db_pool_max_size,
+            )
         except Exception as exc:
             raise AureyServiceBootstrapError(
                 "PostgreSQL checkpointer could not be initialized."
@@ -125,6 +144,7 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
                 oneclaw_evm_signer=runtime.oneclaw_evm_signer,
                 lifi_base_url=runtime.lifi_base_url,
                 prepared_txs=runtime.prepared_txs,
+                decimals_cache=runtime.decimals_cache,
                 token_resolver=token_resolver,
                 hosted_session_factory=hosted_session_factory,
             )
@@ -138,6 +158,7 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
                 oneclaw_evm_signer=runtime.oneclaw_evm_signer,
                 lifi_base_url=runtime.lifi_base_url,
                 prepared_txs=runtime.prepared_txs,
+                decimals_cache=runtime.decimals_cache,
                 token_resolver=runtime.token_resolver,
                 hosted_session_factory=hosted_session_factory,
             )
@@ -149,6 +170,7 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
             hosted_session_factory=hosted_session_factory,
             _postgres=pg,
             _hosted_engine=hosted_engine,
+            _httpx_client=httpx_client,
         )
 
     return AureyServiceState(
@@ -156,6 +178,7 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
         runtime=runtime,
         checkpointer=make_memory_checkpointer(),
         default_model=default_model,
+        _httpx_client=httpx_client,
     )
 
 

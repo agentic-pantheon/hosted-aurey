@@ -10,6 +10,7 @@ Transfers JSON-RPC:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any, Literal, TypedDict
 
@@ -17,12 +18,10 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
 from aurey.graphs.api_key_resolution import effective_alchemy_api_key
+from aurey.graphs.cached_decimals import fetch_erc20_decimals_and_balance_raw
 from aurey.graphs.chains import chain_id_for, chain_info
 from aurey.graphs.checkpoint_serde import uint256_checkpoint_str
 from aurey.graphs.evm_codec import (
-    ERC20_DECIMALS_CALLDATA,
-    decode_abi_uint256_word,
-    erc20_balance_of_calldata,
     format_token_units,
     normalize_evm_address,
     parse_evm_uint,
@@ -97,8 +96,20 @@ class AlchemyGraphInput(BaseModel):
 
 class AlchemyGraphState(TypedDict, total=False):
     input: dict[str, Any]
+    parsed: dict[str, Any]
     error: dict[str, Any]
     result: dict[str, Any]
+
+
+def _validate_ok(parsed: AlchemyGraphInput) -> AlchemyGraphState:
+    return {"parsed": parsed.model_dump()}
+
+
+def _load_parsed_input(state: AlchemyGraphState) -> AlchemyGraphInput:
+    raw = state.get("parsed")
+    if isinstance(raw, dict):
+        return AlchemyGraphInput.model_validate(raw)
+    return AlchemyGraphInput.model_validate(state["input"])
 
 
 def _validation_error(exc: ValidationError) -> dict[str, Any]:
@@ -195,7 +206,7 @@ def _validate_node(state: AlchemyGraphState) -> AlchemyGraphState:
                     message="usd_notional must be positive.",
                 ).model_dump()
             }
-    return {}
+    return _validate_ok(parsed)
 
 
 def _resolve_alchemy_key(runtime: AureyRuntime) -> tuple[str | None, dict[str, Any] | None]:
@@ -462,7 +473,7 @@ def _execute_node(runtime: AureyRuntime, state: AlchemyGraphState) -> AlchemyGra
     if state.get("error"):
         return {}
 
-    parsed = AlchemyGraphInput.model_validate(state["input"])
+    parsed = _load_parsed_input(state)
     api_key, err = _resolve_alchemy_key(runtime)
     if err is not None:
         return {"error": err}
@@ -502,42 +513,55 @@ def _execute_node(runtime: AureyRuntime, state: AlchemyGraphState) -> AlchemyGra
 
         if parsed.operation == "portfolio_tokens":
             url = f"https://api.g.alchemy.com/data/v1/{api_key}/assets/tokens/by-address"
-            payload = runtime.http.request_json(
-                method="POST",
-                url=url,
-                headers=hdr_json,
-                json_body={
-                    "addresses": [{"address": wallet, "networks": [network]}],
-                    "withMetadata": True,
-                    "withPrices": True,
-                    "includeNativeTokens": True,
-                    "includeErc20Tokens": True,
-                },
-            )
+            portfolio_json_body = {
+                "addresses": [{"address": wallet, "networks": [network]}],
+                "withMetadata": True,
+                "withPrices": True,
+                "includeNativeTokens": True,
+                "includeErc20Tokens": True,
+            }
+
+            def _portfolio_payload() -> dict[str, Any] | list[Any]:
+                return runtime.http.request_json(
+                    method="POST",
+                    url=url,
+                    headers=hdr_json,
+                    json_body=portfolio_json_body,
+                )
+
+            def _native_balance_payload() -> dict[str, Any] | None:
+                rpc_local, err_native = _alchemy_rpc_or_error(runtime, chain)
+                if err_native is not None or rpc_local is None:
+                    return None
+                try:
+                    balance_hex = rpc_local.call("eth_getBalance", [wallet, "latest"])
+                    if not isinstance(balance_hex, str):
+                        return None
+                    balance_wei = parse_evm_uint(balance_hex)
+                    cid = chain_id_for(chain)
+                    assert cid is not None
+                    nb = NativeBalanceResult(
+                        chain=chain,
+                        chain_id=cid,
+                        wallet_address=wallet,
+                        balance_wei_hex=balance_hex,
+                        balance_wei=balance_wei,
+                        balance_eth=format_token_units(balance_wei, 18),
+                    )
+                    return nb.model_dump()
+                except Exception:
+                    return None
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                port_fut = pool.submit(_portfolio_payload)
+                native_fut = pool.submit(_native_balance_payload)
+                payload = port_fut.result()
+                native_balance_payload = native_fut.result()
+
             tokens = _parse_portfolio_tokens(
                 payload if isinstance(payload, dict) else {},
                 wallet_checksum=wallet,
             )
-            rpc, err_native = _alchemy_rpc_or_error(runtime, chain)
-            native_balance_payload: dict[str, Any] | None = None
-            if err_native is None and rpc is not None:
-                try:
-                    balance_hex = rpc.call("eth_getBalance", [wallet, "latest"])
-                    if isinstance(balance_hex, str):
-                        balance_wei = parse_evm_uint(balance_hex)
-                        cid = chain_id_for(chain)
-                        assert cid is not None
-                        nb = NativeBalanceResult(
-                            chain=chain,
-                            chain_id=cid,
-                            wallet_address=wallet,
-                            balance_wei_hex=balance_hex,
-                            balance_wei=balance_wei,
-                            balance_eth=format_token_units(balance_wei, 18),
-                        )
-                        native_balance_payload = nb.model_dump()
-                except Exception:
-                    native_balance_payload = None
             result = AlchemyPortfolioResult(
                 chain=chain,
                 wallet_address=wallet,
@@ -627,36 +651,52 @@ def _execute_node(runtime: AureyRuntime, state: AlchemyGraphState) -> AlchemyGra
                 return {"result": result_eth.model_dump()}
 
             token = normalize_evm_address(parsed.token_address or "")
-            try:
-                raw_decimals_t = rpc_local.call(
-                    "eth_call",
-                    [{"to": token, "data": ERC20_DECIMALS_CALLDATA}, "latest"],
-                )
-                if not isinstance(raw_decimals_t, str):
-                    raise TypeError("unexpected eth_call result type")
-                dec_val_t = decode_abi_uint256_word(raw_decimals_t)
-                if dec_val_t > 255:
-                    raise ValueError("decimals out of range")
-            except Exception:
-                return {
-                    "error": GraphErrorBody(
-                        code="rpc_error",
-                        message="RPC eth_call for ERC-20 decimals() failed.",
-                        details={"token_address": token},
-                    ).model_dump()
-                }
+            prices_url = f"https://api.g.alchemy.com/prices/v1/{api_key}/tokens/by-address"
+            hdr_json_px = hdr_json
 
-            px_body_er = runtime.http.request_json(
-                method="POST",
-                url=prices_url,
-                headers=hdr_json_px,
-                json_body={"addresses": [{"network": network, "address": token}]},
-            )
-            if not isinstance(px_body_er, dict):
-                raise ValueError("unexpected prices envelope")
-            prices_er = _parse_prices_payload(px_body_er, [token])
-            price_str_er = prices_er.get(token)
-            if price_str_er is None:
+            def _token_price_str() -> str:
+                px_body_er = runtime.http.request_json(
+                    method="POST",
+                    url=prices_url,
+                    headers=hdr_json_px,
+                    json_body={"addresses": [{"network": network, "address": token}]},
+                )
+                if not isinstance(px_body_er, dict):
+                    raise ValueError("unexpected prices envelope")
+                prices_er = _parse_prices_payload(px_body_er, [token])
+                price = prices_er.get(token)
+                if price is None:
+                    raise ValueError("no price")
+                return price
+
+            def _decimals_and_balance() -> tuple[int, int | None]:
+                dec_val, bal_raw = fetch_erc20_decimals_and_balance_raw(
+                    runtime,
+                    chain_slug=chain,
+                    token_address=token,
+                    wallet_address=wallet,
+                    rpc=rpc_local,
+                )
+                if dec_val is None:
+                    raise ValueError("decimals unavailable")
+                return dec_val, bal_raw
+
+            try:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    price_fut = pool.submit(_token_price_str)
+                    chain_fut = pool.submit(_decimals_and_balance)
+                    price_str_er = price_fut.result()
+                    dec_val_t, bal_raw_er = chain_fut.result()
+            except ValueError as exc:
+                msg = str(exc)
+                if "decimals" in msg:
+                    return {
+                        "error": GraphErrorBody(
+                            code="rpc_error",
+                            message="RPC eth_call for ERC-20 decimals() failed.",
+                            details={"token_address": token},
+                        ).model_dump()
+                    }
                 return {
                     "error": GraphErrorBody(
                         code="http_error",
@@ -679,17 +719,6 @@ def _execute_node(runtime: AureyRuntime, state: AlchemyGraphState) -> AlchemyGra
                         message=str(exc),
                     ).model_dump()
                 }
-
-            bal_raw_er: int | None = None
-            try:
-                bal_data_er = erc20_balance_of_calldata(wallet)
-                bal_out_er = rpc_local.call(
-                    "eth_call", [{"to": token, "data": bal_data_er}, "latest"]
-                )
-                if isinstance(bal_out_er, str):
-                    bal_raw_er = decode_abi_uint256_word(bal_out_er)
-            except Exception:
-                bal_raw_er = None
 
             bal_str_er = str(bal_raw_er) if bal_raw_er is not None else None
             covers_er: bool | None = (
@@ -715,16 +744,21 @@ def _execute_node(runtime: AureyRuntime, state: AlchemyGraphState) -> AlchemyGra
             return {"result": result_er.model_dump()}
 
         rpc_url = f"https://{network}.g.alchemy.com/v2/{api_key}"
-        sent = _post_asset_transfers(
-            runtime,
-            rpc_url=rpc_url,
-            param_block=_transfer_param_block(wallet, direction="from"),
-        )
-        received = _post_asset_transfers(
-            runtime,
-            rpc_url=rpc_url,
-            param_block=_transfer_param_block(wallet, direction="to"),
-        )
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            sent_fut = pool.submit(
+                _post_asset_transfers,
+                runtime,
+                rpc_url=rpc_url,
+                param_block=_transfer_param_block(wallet, direction="from"),
+            )
+            recv_fut = pool.submit(
+                _post_asset_transfers,
+                runtime,
+                rpc_url=rpc_url,
+                param_block=_transfer_param_block(wallet, direction="to"),
+            )
+            sent = sent_fut.result()
+            received = recv_fut.result()
         xfer_models = _merge_transfer_rows(sent, received)
         result = AlchemyTransferHistoryResult(
             chain=chain, wallet_address=wallet, transfers=xfer_models

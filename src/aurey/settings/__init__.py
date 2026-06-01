@@ -483,6 +483,23 @@ class AureySettings(BaseSettings):
         ),
         validation_alias=AliasChoices("AUREY_DATABASE_URL", "DATABASE_URL"),
     )
+    db_pool_min_size: int = Field(default=1, ge=1, description="LangGraph Postgres pool min connections.")
+    db_pool_max_size: int = Field(default=10, ge=1, description="LangGraph Postgres pool max connections.")
+    secret_cache_ttl_seconds: float = Field(
+        default=300.0,
+        ge=0.0,
+        description="TTL for in-process vault secret path cache (0 disables caching wrapper).",
+    )
+    token_decimals_cache_ttl_seconds: float = Field(
+        default=86400.0,
+        ge=0.0,
+        description="TTL for cached ERC-20 decimals() reads.",
+    )
+    token_decimals_cache_maxsize: int = Field(
+        default=2048,
+        ge=1,
+        description="Max entries in the ERC-20 decimals cache.",
+    )
 
     @field_validator("openai_api_key", mode="before")
     @classmethod

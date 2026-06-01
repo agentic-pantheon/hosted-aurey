@@ -20,6 +20,9 @@ class ScriptedEvmJsonRpc(EvmJsonRpcPort):
             return handler(params)
         return handler
 
+    def call_batch(self, calls: list[tuple[str, list[Any]]]) -> list[Any]:
+        return [self.call(method, params) for method, params in calls]
+
 
 def rpc_factory_from_mapping(
     mapping: dict[str, Any],

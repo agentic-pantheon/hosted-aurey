@@ -151,7 +151,7 @@ class TokenResolver:
         rpc, err = self._open_rpc(slug)
         if err is not None:
             return None, err
-        decimals = read_erc20_decimals(rpc, addr)
+        decimals = read_erc20_decimals(rpc, addr, runtime=self._runtime, chain_slug=slug)
         if decimals is None:
             return None, {
                 "code": "invalid_input",

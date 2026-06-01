@@ -37,6 +37,9 @@ class EvmJsonRpcPort(Protocol):
     def call(self, method: str, params: list[Any]) -> Any:
         """Perform a JSON-RPC call and return the decoded ``result`` payload."""
 
+    def call_batch(self, calls: list[tuple[str, list[Any]]]) -> list[Any]:
+        """Optional batch POST; implementations may omit (use :func:`rpc_call_batch`)."""
+
 
 @runtime_checkable
 class HttpJsonPort(Protocol):
