@@ -368,20 +368,20 @@ def _execute_node(runtime: AureyRuntime, state: ReadGraphState) -> ReadGraphStat
                 cg_recognized=True,
             )
             return {"result": result.model_dump()}
-            result = KnownAddressResult(
-                chain=chain,
-                ticker=ticker.strip(),
-                symbol=resolved.symbol,
-                name=resolved.name,
-                resolved_address=resolved.address,
-                source=resolved.source,
-                trust_tier=resolved.trust_tier,
-                verified_onchain=resolved.verified_onchain,
-                cg_recognized=resolved.cg_recognized,
-                lifi_supported=resolved.lifi_supported,
-                warning=resolved.warning,
-                decimals=resolved.decimals,
-            )
+        result = KnownAddressResult(
+            chain=chain,
+            ticker=ticker.strip(),
+            symbol=resolved.symbol,
+            name=resolved.name,
+            resolved_address=resolved.address,
+            source=resolved.source,
+            trust_tier=resolved.trust_tier,
+            verified_onchain=resolved.verified_onchain,
+            cg_recognized=resolved.cg_recognized,
+            lifi_supported=resolved.lifi_supported,
+            warning=resolved.warning,
+            decimals=resolved.decimals,
+        )
         return {"result": result.model_dump()}
 
     if parsed.operation == "list_supported_tokens":
