@@ -39,6 +39,7 @@ def lookup_hosted_wallet_addresses(
     runtime: AureyRuntime,
     *,
     chain: HostedWalletChain = "all",
+    telegram_user_id: int | None = None,
 ) -> dict[str, Any]:
     """Load hosted row addresses; lazy-backfill from signing-keys when a column is empty."""
 
@@ -60,8 +61,8 @@ def lookup_hosted_wallet_addresses(
                 "message": "Hosted user database is not configured.",
             },
         }
-    telegram_user_id = _resolve_telegram_user_id()
-    if telegram_user_id is None:
+    tid = telegram_user_id if telegram_user_id is not None else _resolve_telegram_user_id()
+    if tid is None:
         return {
             "ok": False,
             "error": {
@@ -81,7 +82,7 @@ def lookup_hosted_wallet_addresses(
     try:
         row = db.scalar(
             select(HostedPlatformUserORM).where(
-                HostedPlatformUserORM.telegram_user_id == telegram_user_id,
+                HostedPlatformUserORM.telegram_user_id == tid,
             )
         )
         if row is None:
@@ -143,7 +144,7 @@ def lookup_hosted_wallet_addresses(
 
         result: dict[str, Any] = {
             "source": "signing_keys_backfill" if backfilled else "database",
-            "telegram_user_id": telegram_user_id,
+            "telegram_user_id": tid,
         }
         if want_eth:
             result["ethereum"] = eth_out

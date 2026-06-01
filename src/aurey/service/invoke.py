@@ -10,6 +10,8 @@ from langchain_core.messages import HumanMessage
 from openai import APIConnectionError, APITimeoutError
 from pydantic import BaseModel
 
+from aurey.cloud.hosted_solana_intent import message_asks_hosted_solana_wallet
+from aurey.cloud.hosted_wallet_addresses import lookup_hosted_wallet_addresses
 from aurey.cloud.signing_context import (
     HostedSigningContext,
     hosted_signing_context_scope,
@@ -115,10 +117,77 @@ def _resolve_hosted_wallet_address_hint(
 def _hosted_wallet_system_turn_line(addr: str) -> str:
     return (
         "Hosted-user binding for this chat turn: the default EVM wallet address "
-        f"(from/swap/read context) is {addr}. Treat this as authoritative when the user "
-        'says "my wallet" or omits addresses unless they explicitly name a different '
-        "`0x` or ENS name."
+        f"(from/swap/read context on EVM chains) is {addr}. Treat this as authoritative when the user "
+        'says "my wallet" for EVM or omits addresses on EVM unless they explicitly name a different '
+        "`0x` or ENS name. This EVM binding does not replace a separate provisioned Solana address."
     )
+
+
+def _hosted_solana_wallet_system_turn_line(addr: str) -> str:
+    return (
+        "Hosted-user binding for this chat turn: the provisioned Solana wallet address "
+        f"is {addr}. Treat this as authoritative when the user asks about their Solana wallet or address."
+    )
+
+
+def _hosted_wallet_binding_turn_prefix(
+    *,
+    evm_address: str | None,
+    solana_address: str | None,
+) -> str | None:
+    lines: list[str] = []
+    if evm_address:
+        lines.append(_hosted_wallet_system_turn_line(evm_address))
+    if solana_address:
+        lines.append(_hosted_solana_wallet_system_turn_line(solana_address))
+    if not lines:
+        return None
+    return "\n\n".join(lines)
+
+
+def _resolve_hosted_solana_address_hint(
+    merged_context: dict[str, Any],
+    *,
+    svc: AureyServiceState,
+    message: str,
+    telegram_user_id: int | None,
+) -> str | None:
+    """Return Solana pubkey from context, or load/backfill when the user asks for Solana."""
+
+    raw_ctx = merged_context.get("hosted_solana_wallet_address")
+    if isinstance(raw_ctx, str) and raw_ctx.strip():
+        return raw_ctx.strip()
+
+    if not svc.settings.hosted_platform_enabled:
+        return None
+    if telegram_user_id is None:
+        return None
+    if not message_asks_hosted_solana_wallet(message):
+        return None
+
+    try:
+        out = lookup_hosted_wallet_addresses(
+            svc.runtime,
+            chain="solana",
+            telegram_user_id=telegram_user_id,
+        )
+    except Exception:
+        _log.debug("hosted Solana resolve on invoke failed", exc_info=True)
+        return None
+
+    if not out.get("ok"):
+        _log.debug(
+            "hosted Solana resolve skipped: %s",
+            out.get("error"),
+        )
+        return None
+    result = out.get("result")
+    if not isinstance(result, dict):
+        return None
+    sol = result.get("solana")
+    if isinstance(sol, str) and sol.strip():
+        return sol.strip()
+    return None
 
 
 def _telegram_user_id_from_invoke_context(context: dict[str, Any]) -> int | None:
@@ -136,13 +205,13 @@ def _invoke_graph_with_transient_retries(
     *,
     message: str,
     config: dict[str, Any],
-    hosted_wallet_address: str | None = None,
+    hosted_wallet_binding_prefix: str | None = None,
 ) -> Any:
     """Retry LLM HTTP/network blips during ``graph.invoke`` (often wrapped by LangChain)."""
 
     text = message
-    if hosted_wallet_address:
-        text = f"{_hosted_wallet_system_turn_line(hosted_wallet_address)}\n\n{text}"
+    if hosted_wallet_binding_prefix:
+        text = f"{hosted_wallet_binding_prefix}\n\n{text}"
     payload = {"messages": [HumanMessage(content=text)]}
     last_exc: BaseException | None = None
     for attempt in range(_MODEL_TRANSIENT_ATTEMPTS):
@@ -224,6 +293,21 @@ def invoke_deep_agent_turn(
     if hosted_wallet_resolved:
         merged_context["hosted_wallet_address"] = hosted_wallet_resolved
 
+    telegram_user_id = _telegram_user_id_from_invoke_context(merged_context)
+    hosted_solana_resolved = _resolve_hosted_solana_address_hint(
+        merged_context,
+        svc=svc,
+        message=message,
+        telegram_user_id=telegram_user_id,
+    )
+    if hosted_solana_resolved:
+        merged_context["hosted_solana_wallet_address"] = hosted_solana_resolved
+
+    hosted_wallet_binding_prefix = _hosted_wallet_binding_turn_prefix(
+        evm_address=hosted_wallet_resolved,
+        solana_address=hosted_solana_resolved,
+    )
+
     ctx_keys = ",".join(sorted(merged_context)) if merged_context else ""
     _log.debug(
         "invoke context  %s",
@@ -295,8 +379,6 @@ def invoke_deep_agent_turn(
         )
 
     try:
-        telegram_user_id = _telegram_user_id_from_invoke_context(merged_context)
-
         def _run_graph_invoke() -> Any:
             if hosted_signing_context is not None:
                 with hosted_signing_context_scope(hosted_signing_context):
@@ -305,14 +387,14 @@ def invoke_deep_agent_turn(
                             graph,
                             message=message,
                             config=config,
-                            hosted_wallet_address=hosted_wallet_resolved,
+                            hosted_wallet_binding_prefix=hosted_wallet_binding_prefix,
                         )
             with hosted_telegram_user_id_scope(telegram_user_id):
                 return _invoke_graph_with_transient_retries(
                     graph,
                     message=message,
                     config=config,
-                    hosted_wallet_address=hosted_wallet_resolved,
+                    hosted_wallet_binding_prefix=hosted_wallet_binding_prefix,
                 )
 
         result = _run_graph_invoke()
