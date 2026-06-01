@@ -909,6 +909,9 @@ def hosted_invoke_bundle_for_telegram_user(
                 extras["hosted_wallet_address"] = to_checksum_evm_address(wa_raw)
             except ValueError:
                 pass
+        sol_raw = (row.solana_wallet_address or "").strip()
+        if sol_raw:
+            extras["hosted_solana_wallet_address"] = sol_raw
         if (row.onboarding_state or "").strip() != "ready":
             return None, extras
         enc_raw = row.agent_api_key_encrypted

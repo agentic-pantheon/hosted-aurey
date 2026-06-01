@@ -29,6 +29,7 @@ from aurey.graphs import (
 from aurey.graphs.chains import chain_name_for_id
 from aurey.graphs.read import ReadGraphInput
 from aurey.graphs.swap_diag import SWAP_LOG, log_swap_tool
+from aurey.cloud.hosted_wallet_addresses import lookup_hosted_wallet_addresses
 from aurey.runtime import AureyRuntime
 from aurey.custody.errors import OneClawSigningError, SecretStoreUnavailableError
 from aurey.custody.intents_models import IntentsSignTransactionRequest
@@ -668,6 +669,15 @@ class EvmResolveEnsArgs(BaseModel):
         default="ethereum",
         min_length=1,
         description="Must be 'ethereum'. ENS forward resolution is only defined on L1 mainnet.",
+    )
+
+
+class GetHostedWalletAddressesArgs(BaseModel):
+    """Hosted Telegram user's provisioned chain addresses from Postgres / Platform signing-keys."""
+
+    chain: Literal["ethereum", "solana", "all"] = Field(
+        default="all",
+        description="Which address to return: ethereum (EVM), solana, or all.",
     )
 
 
@@ -1595,12 +1605,22 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
             ]
         )
 
+    @tool(args_schema=GetHostedWalletAddressesArgs)
+    def get_hosted_wallet_addresses(
+        chain: Literal["ethereum", "solana", "all"] = "all",
+    ) -> dict[str, Any]:
+        """Return the hosted Telegram user's provisioned wallet address(es) for Ethereum and/or Solana.
+
+        Lazy-loads from 1Claw signing-keys when a column is empty. Requires hosted Telegram context."""
+        return lookup_hosted_wallet_addresses(runtime, chain=chain)
+
     @tool(args_schema=RequestUserInputArgs)
     def request_user_input(questions: list[UserQuestion]) -> dict[str, Any]:
         """Ask the host/UI for clarifying wallet-operation fields only; never solicit secrets or PII unrelated to txs."""
         count = note_user_input_request(questions)
         return {"ok": True, "result": {"status": "needs_user_input", "question_count": count}}
 
+    tools.append(get_hosted_wallet_addresses)
     tools.append(request_user_input)
 
     return tools

@@ -14,9 +14,11 @@ __all__ = [
     "HOSTED_SIGNING_CONTEXT_REQUIRED_CODE",
     "HostedSigningContext",
     "current_hosted_signing_context",
+    "current_hosted_telegram_user_id",
     "hosted_signing_missing_context_graph_error",
     "hosted_signing_missing_context_tool_error",
     "hosted_signing_context_scope",
+    "hosted_telegram_user_id_scope",
 ]
 
 
@@ -68,6 +70,11 @@ current_hosted_signing_context: ContextVar[HostedSigningContext | None] = Contex
     default=None,
 )
 
+current_hosted_telegram_user_id: ContextVar[int | None] = ContextVar(
+    "current_hosted_telegram_user_id",
+    default=None,
+)
+
 
 @contextmanager
 def hosted_signing_context_scope(ctx: HostedSigningContext) -> Iterator[None]:
@@ -78,3 +85,14 @@ def hosted_signing_context_scope(ctx: HostedSigningContext) -> Iterator[None]:
         yield
     finally:
         current_hosted_signing_context.reset(token)
+
+
+@contextmanager
+def hosted_telegram_user_id_scope(telegram_user_id: int | None) -> Iterator[None]:
+    """Bind Telegram user id for hosted wallet lookup tools (works before onboarding ``ready``)."""
+
+    token = current_hosted_telegram_user_id.set(telegram_user_id)
+    try:
+        yield
+    finally:
+        current_hosted_telegram_user_id.reset(token)

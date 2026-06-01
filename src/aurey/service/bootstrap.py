@@ -89,6 +89,7 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
         http=UrllibHttpJsonClient(),
         tx_pipeline=Web3TxPipeline(settings=s, secret_store=store),
         oneclaw_evm_signer=client,
+        hosted_session_factory=None,
     )
 
     default_model = (s.deep_agent_default_model or "").strip() or "openai:gpt-4o-mini"
@@ -125,6 +126,20 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
                 lifi_base_url=runtime.lifi_base_url,
                 prepared_txs=runtime.prepared_txs,
                 token_resolver=token_resolver,
+                hosted_session_factory=hosted_session_factory,
+            )
+        elif hosted_session_factory is not None:
+            runtime = AureyRuntime(
+                settings=runtime.settings,
+                secret_store=runtime.secret_store,
+                evm_rpc_factory=runtime.evm_rpc_factory,
+                http=runtime.http,
+                tx_pipeline=runtime.tx_pipeline,
+                oneclaw_evm_signer=runtime.oneclaw_evm_signer,
+                lifi_base_url=runtime.lifi_base_url,
+                prepared_txs=runtime.prepared_txs,
+                token_resolver=runtime.token_resolver,
+                hosted_session_factory=hosted_session_factory,
             )
         return AureyServiceState(
             settings=s,

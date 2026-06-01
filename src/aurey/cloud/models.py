@@ -60,6 +60,7 @@ class HostedPlatformUserORM(Base):
     agent_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     wallet_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    solana_wallet_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

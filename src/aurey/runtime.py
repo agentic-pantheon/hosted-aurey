@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from threading import Lock
 from time import monotonic
@@ -93,3 +94,4 @@ class AureyRuntime:
     lifi_base_url: str = "https://li.quest"
     prepared_txs: PreparedTransactionStore = field(default_factory=PreparedTransactionStore)
     token_resolver: "TokenResolver | None" = None
+    hosted_session_factory: Callable[..., Any] | None = None

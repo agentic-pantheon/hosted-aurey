@@ -112,6 +112,15 @@ def _chain_label_ethereum(chain: Any) -> bool:
     return False
 
 
+def _chain_label_solana(chain: Any) -> bool:
+    if isinstance(chain, str):
+        c = chain.strip().lower()
+        if not c:
+            return False
+        return c == "solana" or c == "sol" or c.startswith("solana:")
+    return False
+
+
 def _format_signing_key_address_line(item: Mapping[str, Any]) -> str | None:
     chain = item.get("chain") or item.get("chain_slug") or item.get("chainSlug")
     chain_label = str(chain).strip() if chain else "unknown"
@@ -190,6 +199,35 @@ def extract_ethereum_address_from_signing_key_items(items: Any) -> str | None:
     return None
 
 
+def extract_solana_address_from_signing_key_items(items: Any) -> str | None:
+    """First non-empty address from signing-key entries where ``chain`` is Solana."""
+
+    if not isinstance(items, list):
+        return None
+    sol_items: list[Mapping[str, Any]] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        chain = item.get("chain") or item.get("chain_slug") or item.get("chainSlug")
+        if _chain_label_solana(chain):
+            sol_items.append(item)
+    for item in sol_items:
+        raw = item.get("address") or item.get("solana_address")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return None
+
+
+def extract_solana_wallet_address_from_bootstrap_payload(payload: Any) -> str | None:
+    """Best-effort Solana address from Platform bootstrap JSON (signing_keys blocks)."""
+
+    for lst in _signing_keys_list_candidates(payload):
+        found = extract_solana_address_from_signing_key_items(lst)
+        if found is not None:
+            return found
+    return None
+
+
 def extract_ethereum_wallet_address_from_bootstrap_payload(payload: Any) -> str | None:
     """Best-effort Ethereum address from Platform bootstrap JSON (signing_keys blocks)."""
 
@@ -227,6 +265,15 @@ def ethereum_address_from_signing_keys_payload(payload: Any) -> str | None:
     return extract_ethereum_address_from_signing_key_items(arr)
 
 
+def solana_address_from_signing_keys_payload(payload: Any) -> str | None:
+    """Extract Solana address from signing-keys GET response."""
+
+    arr = extract_signing_keys_array_from_api(payload)
+    if arr is None:
+        return None
+    return extract_solana_address_from_signing_key_items(arr)
+
+
 @dataclass(frozen=True)
 class PlatformUpsertResult:
     connection_id: str
@@ -251,6 +298,7 @@ class PlatformBootstrapResult:
     user_agent_id: str | None = None
     agent_api_key: str | None = None
     wallet_address: str | None = None
+    solana_wallet_address: str | None = None
 
 
 class OneClawPlatformClient:
@@ -442,6 +490,7 @@ class OneClawPlatformClient:
             ("data", "summary", "agent_id"),
         )
         wallet_address = extract_ethereum_wallet_address_from_bootstrap_payload(payload)
+        solana_wallet_address = extract_solana_wallet_address_from_bootstrap_payload(payload)
         agent_api_key = extract_optional_str(
             payload,
             ("summary", "agent_api_key"),
@@ -455,6 +504,7 @@ class OneClawPlatformClient:
             user_agent_id=user_agent_id,
             agent_api_key=agent_api_key,
             wallet_address=wallet_address,
+            solana_wallet_address=solana_wallet_address,
         )
 
     def reissue_claim(
@@ -528,6 +578,9 @@ __all__ = [
     "extract_ethereum_address_from_signing_key_items",
     "extract_ethereum_wallet_address_from_bootstrap_payload",
     "extract_signing_keys_array_from_api",
+    "extract_solana_address_from_signing_key_items",
+    "extract_solana_wallet_address_from_bootstrap_payload",
     "list_signing_key_address_lines_from_items",
     "list_signing_key_address_lines_from_payload",
+    "solana_address_from_signing_keys_payload",
 ]

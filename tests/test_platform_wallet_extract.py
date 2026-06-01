@@ -6,7 +6,10 @@ from aurey.cloud.platform_client import (
     ethereum_address_from_signing_keys_payload,
     extract_ethereum_address_from_signing_key_items,
     extract_ethereum_wallet_address_from_bootstrap_payload,
+    extract_solana_address_from_signing_key_items,
+    extract_solana_wallet_address_from_bootstrap_payload,
     list_signing_key_address_lines_from_payload,
+    solana_address_from_signing_keys_payload,
 )
 
 
@@ -58,3 +61,34 @@ def test_list_signing_key_address_lines_includes_all_chains() -> None:
     assert len(lines) == 2
     assert any(line.startswith("Ethereum:") for line in lines)
     assert any(line.startswith("solana:") for line in lines)
+
+
+def test_signing_keys_endpoint_parse_solana() -> None:
+    body = {
+        "keys": [
+            {"chain": "solana", "address": "SoMeSolanaPubkey111"},
+        ]
+    }
+    addr = solana_address_from_signing_keys_payload(body)
+    assert addr == "SoMeSolanaPubkey111"
+
+
+def test_bootstrap_extracts_summary_signing_keys_solana() -> None:
+    payload = {
+        "summary": {
+            "signing_keys": [
+                {"chain": "solana", "address": "SolBootstrapAddr"},
+            ]
+        },
+        "claim_url": "https://claim/x",
+    }
+    addr = extract_solana_wallet_address_from_bootstrap_payload(payload)
+    assert addr == "SolBootstrapAddr"
+
+
+def test_extract_solana_from_items_ignores_ethereum() -> None:
+    items = [
+        {"chain": "ethereum", "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        {"chain": "sol", "address": "SolOnly"},
+    ]
+    assert extract_solana_address_from_signing_key_items(items) == "SolOnly"

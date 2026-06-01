@@ -23,7 +23,10 @@ from aurey.cloud.platform_client import (
     PlatformReissueClaimResult,
     list_signing_key_address_lines_from_payload,
 )
-from aurey.cloud.wallet_sync import maybe_backfill_wallet_from_signing_keys
+from aurey.cloud.wallet_sync import (
+    maybe_backfill_solana_wallet_from_signing_keys,
+    maybe_backfill_wallet_from_signing_keys,
+)
 from aurey.settings import AureySettings
 
 _log = logging.getLogger(__name__)
@@ -569,6 +572,13 @@ def ensure_telegram_user_provisioned(
             return
         row.wallet_address = addr.strip()
 
+    def _merge_solana(addr: str | None) -> None:
+        if not addr:
+            return
+        if (row.solana_wallet_address or "").strip():
+            return
+        row.solana_wallet_address = addr.strip()
+
     if row is None:
         row = HostedPlatformUserORM(
             telegram_user_id=telegram_user_id,
@@ -580,6 +590,7 @@ def ensure_telegram_user_provisioned(
             user_agent_id=boot.user_agent_id,
         )
         _merge_wallet(boot.wallet_address)
+        _merge_solana(boot.solana_wallet_address)
         session.add(row)
     else:
         row.telegram_username = username
@@ -590,6 +601,7 @@ def ensure_telegram_user_provisioned(
         if boot.user_agent_id is not None:
             row.user_agent_id = boot.user_agent_id
         _merge_wallet(boot.wallet_address)
+        _merge_solana(boot.solana_wallet_address)
 
     _persist_hosted_ocv_after_bootstrap(
         settings=settings,
@@ -601,6 +613,12 @@ def ensure_telegram_user_provisioned(
     # Bootstrap JSON may omit addresses while agent id exists; fetch once when plausible.
     if platform is not None:
         maybe_backfill_wallet_from_signing_keys(
+            session,
+            platform,
+            row,
+            reason="post_bootstrap",
+        )
+        maybe_backfill_solana_wallet_from_signing_keys(
             session,
             platform,
             row,

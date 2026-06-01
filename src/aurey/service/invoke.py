@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from aurey.cloud.signing_context import (
     HostedSigningContext,
     hosted_signing_context_scope,
+    hosted_telegram_user_id_scope,
 )
 from aurey.graphs.evm_codec import to_checksum_evm_address
 from aurey.reasoning import thread_config
@@ -118,6 +119,16 @@ def _hosted_wallet_system_turn_line(addr: str) -> str:
         'says "my wallet" or omits addresses unless they explicitly name a different '
         "`0x` or ENS name."
     )
+
+
+def _telegram_user_id_from_invoke_context(context: dict[str, Any]) -> int | None:
+    raw = context.get("telegram_user_id")
+    if raw is None:
+        return None
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        return None
 
 
 def _invoke_graph_with_transient_retries(
@@ -284,21 +295,27 @@ def invoke_deep_agent_turn(
         )
 
     try:
-        if hosted_signing_context is not None:
-            with hosted_signing_context_scope(hosted_signing_context):
-                result = _invoke_graph_with_transient_retries(
+        telegram_user_id = _telegram_user_id_from_invoke_context(merged_context)
+
+        def _run_graph_invoke() -> Any:
+            if hosted_signing_context is not None:
+                with hosted_signing_context_scope(hosted_signing_context):
+                    with hosted_telegram_user_id_scope(telegram_user_id):
+                        return _invoke_graph_with_transient_retries(
+                            graph,
+                            message=message,
+                            config=config,
+                            hosted_wallet_address=hosted_wallet_resolved,
+                        )
+            with hosted_telegram_user_id_scope(telegram_user_id):
+                return _invoke_graph_with_transient_retries(
                     graph,
                     message=message,
                     config=config,
                     hosted_wallet_address=hosted_wallet_resolved,
                 )
-        else:
-            result = _invoke_graph_with_transient_retries(
-                graph,
-                message=message,
-                config=config,
-                hosted_wallet_address=hosted_wallet_resolved,
-            )
+
+        result = _run_graph_invoke()
     except Exception as exc:
         _log.warning(
             "agent invoke failed after retries  session=%s  detail=%s",

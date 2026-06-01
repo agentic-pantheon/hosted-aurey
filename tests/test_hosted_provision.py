@@ -114,8 +114,9 @@ def test_ensure_telegram_user_provisioned_rebootstraps_while_awaiting_claim() ->
         assert row.wallet_address == to_checksum_evm_address(
             "0xdddddddddddddddddddddddddddddddddddddddd",
         )
+        assert row.solana_wallet_address is None
         assert row.agent_api_key == "ocv_fake_provision_key"
-        assert fake.signing_keys_calls == []
+        assert fake.signing_keys_calls == ["agent-x"]
 
         row2, refreshed2 = ensure_telegram_user_provisioned(
             session,
@@ -638,6 +639,7 @@ def test_operator_registration_email_after_bootstrap(monkeypatch) -> None:
         lines = sent[0]["wallet_address_lines"]
         assert isinstance(lines, list)
         assert len(lines) >= 2
+        assert row.solana_wallet_address == "SolPubkeyExample"
     finally:
         session.close()
         engine.dispose()
