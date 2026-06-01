@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from aurey.cloud.models import Base, HostedPlatformUserORM
 from aurey.cloud.wallet_sync import (
+    maybe_backfill_hosted_wallet_columns_from_signing_keys,
     maybe_backfill_solana_wallet_from_signing_keys,
     maybe_backfill_wallet_from_signing_keys,
 )
@@ -102,10 +103,14 @@ def test_maybe_backfill_evm_and_solana_independent() -> None:
                 ]
             },
         )
-        evm = maybe_backfill_wallet_from_signing_keys(session, plat, row, reason="test")
-        sol = maybe_backfill_solana_wallet_from_signing_keys(session, plat, row, reason="test")
+        evm, sol = maybe_backfill_hosted_wallet_columns_from_signing_keys(
+            session,
+            plat,
+            row,
+            reason="test",
+        )
         assert evm is not None and evm.startswith("0x")
         assert sol == "SolBoth"
-        assert len(plat.calls) == 2
+        assert len(plat.calls) == 1
     finally:
         engine.dispose()

@@ -632,6 +632,63 @@ class OneClawHttpClient:
                     return self._access_token
             return self._fetch_access_token(ag, api_key=api_key)
 
+    def get_agent_signing_keys_json(self, agent_id: str, *, agent_api_key: str) -> dict[str, Any]:
+        """GET ``/v1/agents/{agent_id}/signing-keys`` using a per-user ``ocv_`` agent API key."""
+
+        ag = (agent_id or "").strip()
+        ocv = (agent_api_key or "").strip()
+        if not ag:
+            raise ValueError("agent_id must not be empty.")
+        if not ocv:
+            raise ValueError("agent_api_key must not be empty.")
+        bearer = self._fetch_access_token(ag, api_key=ocv)
+        url = f"{self._base_url}/v1/agents/{ag}/signing-keys"
+        request = Request(
+            url,
+            headers={"Authorization": f"Bearer {bearer}"},
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=15) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as exc:
+            _log.warning(
+                "1Claw GET signing-keys failed HTTP %s url=%s agent_id=%s response_body_preview=%s",
+                exc.code,
+                url,
+                ag,
+                _http_error_snippet(exc, max_len=240),
+            )
+            from aurey.cloud.platform_client import HostedPlatformApiError
+
+            raise HostedPlatformApiError(
+                f"Agent signing-keys HTTP {exc.code} for agent_id={ag}.",
+                status_code=int(exc.code),
+            ) from exc
+        except (OSError, URLError, json.JSONDecodeError) as exc:
+            _log.warning(
+                "1Claw GET signing-keys failed url=%s agent_id=%s err=%s",
+                url,
+                ag,
+                type(exc).__name__,
+            )
+            from aurey.cloud.platform_client import HostedPlatformApiError
+
+            raise HostedPlatformApiError(
+                f"Agent signing-keys request failed for agent_id={ag} ({type(exc).__name__}).",
+            ) from exc
+        try:
+            payload = json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError as exc:
+            from aurey.cloud.platform_client import HostedPlatformApiError
+
+            raise HostedPlatformApiError("Agent signing-keys response was not valid JSON.") from exc
+        if not isinstance(payload, dict):
+            from aurey.cloud.platform_client import HostedPlatformApiError
+
+            raise HostedPlatformApiError("Agent signing-keys response must be a JSON object.")
+        return payload
+
     def _secret_url_path_suffix(self, path: str) -> str:
         normalized = path.strip().lstrip("/")
         if not normalized:

@@ -107,7 +107,7 @@ def test_invoke_prefixes_human_message_when_hosted_wallet_bound() -> None:
     assert "hi" in msgs[0].content
 
 
-def test_invoke_prefixes_solana_when_in_context() -> None:
+def test_invoke_prefixes_solana_from_server_context() -> None:
     payloads: list[object] = []
 
     def capture_invoke(payload, config=None):
@@ -121,49 +121,24 @@ def test_invoke_prefixes_solana_when_in_context() -> None:
     graph = MagicMock()
     graph.invoke.side_effect = capture_invoke
     svc.get_or_create_graph.return_value = graph
+
+    from aurey.service.invoke import HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY
 
     sol = "SolPubkeyExample111"
     out = invoke_deep_agent_turn(
         svc,
         message="hi",
         session_id="t:sol",
-        context={"hosted_solana_wallet_address": sol, "telegram_user_id": "99"},
+        context={
+            "hosted_solana_wallet_address": sol,
+            "telegram_user_id": "99",
+            HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY: True,
+        },
     )
     assert out.ok is True
     msgs = payloads[0]["messages"]
     assert sol in msgs[0].content
     assert "Solana wallet address" in msgs[0].content
-
-
-def test_invoke_proactive_solana_lookup_on_question(monkeypatch) -> None:
-    payloads: list[object] = []
-
-    def capture_invoke(payload, config=None):
-        _ = config
-        payloads.append(payload)
-        return {"messages": []}
-
-    svc = MagicMock(spec=AureyServiceState)
-    svc.settings = AureySettings(hosted_platform_enabled=True)
-    svc.default_model = "openai:gpt-4o-mini"
-    svc.runtime = MagicMock()
-    graph = MagicMock()
-    graph.invoke.side_effect = capture_invoke
-    svc.get_or_create_graph.return_value = graph
-
-    monkeypatch.setattr(
-        "aurey.service.invoke.lookup_hosted_wallet_addresses",
-        lambda *_a, **_k: {"ok": True, "result": {"solana": "LazySolAddr"}},
-    )
-
-    out = invoke_deep_agent_turn(
-        svc,
-        message="What's my Solana wallet address?",
-        session_id="t:sol-lazy",
-        context={"telegram_user_id": "42"},
-    )
-    assert out.ok is True
-    assert "LazySolAddr" in payloads[0]["messages"][0].content
 
 
 def test_invoke_uses_server_hosted_wallet_before_ready() -> None:

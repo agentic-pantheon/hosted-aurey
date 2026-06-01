@@ -900,6 +900,7 @@ def hosted_invoke_bundle_for_telegram_user(
             cfg,
             telegram_user_id=tid,
             reason="telegram_invoke",
+            oneclaw_http=state.runtime.oneclaw_evm_signer,
         )
         if row is None:
             return None, extras
@@ -969,7 +970,7 @@ def handle_telegram_text(
         telegram_user_id=user_id,
     )
     context.update(hosted_ctx)
-    if hosted_ctx.get("hosted_wallet_address"):
+    if hosted_ctx.get("hosted_wallet_address") or hosted_ctx.get("hosted_solana_wallet_address"):
         from aurey.service.invoke import HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY
 
         context[HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY] = True

@@ -10,7 +10,6 @@ from langchain_core.messages import HumanMessage
 from openai import APIConnectionError, APITimeoutError
 from pydantic import BaseModel
 
-from aurey.cloud.hosted_solana_intent import message_asks_hosted_solana_wallet
 from aurey.cloud.hosted_wallet_addresses import lookup_hosted_wallet_addresses
 from aurey.cloud.signing_context import (
     HostedSigningContext,
@@ -149,20 +148,16 @@ def _resolve_hosted_solana_address_hint(
     merged_context: dict[str, Any],
     *,
     svc: AureyServiceState,
-    message: str,
     telegram_user_id: int | None,
 ) -> str | None:
-    """Return Solana pubkey from context, or load/backfill when the user asks for Solana."""
+    """Return Solana pubkey from invoke context (same server-sourced path as EVM)."""
 
-    raw_ctx = merged_context.get("hosted_solana_wallet_address")
-    if isinstance(raw_ctx, str) and raw_ctx.strip():
-        return raw_ctx.strip()
+    if merged_context.get(HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY) is True:
+        v = merged_context.get("hosted_solana_wallet_address")
+        if isinstance(v, str) and v.strip():
+            return v.strip()
 
-    if not svc.settings.hosted_platform_enabled:
-        return None
-    if telegram_user_id is None:
-        return None
-    if not message_asks_hosted_solana_wallet(message):
+    if not svc.settings.hosted_platform_enabled or telegram_user_id is None:
         return None
 
     try:
@@ -176,10 +171,6 @@ def _resolve_hosted_solana_address_hint(
         return None
 
     if not out.get("ok"):
-        _log.debug(
-            "hosted Solana resolve skipped: %s",
-            out.get("error"),
-        )
         return None
     result = out.get("result")
     if not isinstance(result, dict):
@@ -297,7 +288,6 @@ def invoke_deep_agent_turn(
     hosted_solana_resolved = _resolve_hosted_solana_address_hint(
         merged_context,
         svc=svc,
-        message=message,
         telegram_user_id=telegram_user_id,
     )
     if hosted_solana_resolved:

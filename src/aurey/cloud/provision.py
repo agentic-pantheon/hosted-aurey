@@ -23,10 +23,7 @@ from aurey.cloud.platform_client import (
     PlatformReissueClaimResult,
     list_signing_key_address_lines_from_payload,
 )
-from aurey.cloud.wallet_sync import (
-    maybe_backfill_solana_wallet_from_signing_keys,
-    maybe_backfill_wallet_from_signing_keys,
-)
+from aurey.cloud.wallet_sync import maybe_backfill_hosted_wallet_columns_from_signing_keys
 from aurey.settings import AureySettings
 
 _log = logging.getLogger(__name__)
@@ -612,17 +609,13 @@ def ensure_telegram_user_provisioned(
 
     # Bootstrap JSON may omit addresses while agent id exists; fetch once when plausible.
     if platform is not None:
-        maybe_backfill_wallet_from_signing_keys(
+        maybe_backfill_hosted_wallet_columns_from_signing_keys(
             session,
             platform,
             row,
             reason="post_bootstrap",
-        )
-        maybe_backfill_solana_wallet_from_signing_keys(
-            session,
-            platform,
-            row,
-            reason="post_bootstrap",
+            settings=settings,
+            oneclaw_http=vault_http_client,
         )
 
     session.flush()

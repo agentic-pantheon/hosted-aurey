@@ -13,10 +13,7 @@ from aurey.cloud.signing_context import (
     current_hosted_signing_context,
     current_hosted_telegram_user_id,
 )
-from aurey.cloud.wallet_sync import (
-    maybe_backfill_solana_wallet_from_signing_keys,
-    maybe_backfill_wallet_from_signing_keys,
-)
+from aurey.cloud.wallet_sync import maybe_backfill_hosted_wallet_columns_from_signing_keys
 from aurey.graphs.evm_codec import to_checksum_evm_address
 from aurey.runtime import AureyRuntime
 
@@ -95,35 +92,29 @@ def lookup_hosted_wallet_addresses(
             }
 
         aid = (row.user_agent_id or "").strip()
-        if want_sol and not (row.solana_wallet_address or "").strip():
-            if not aid:
-                return {
-                    "ok": False,
-                    "error": {
-                        "code": "user_agent_missing",
-                        "message": "Solana wallet is not provisioned yet (missing user agent).",
-                    },
-                }
+        need_evm = want_eth and not (row.wallet_address or "").strip()
+        need_sol = want_sol and not (row.solana_wallet_address or "").strip()
+        if (need_evm or need_sol) and not aid:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "user_agent_missing",
+                    "message": "Wallet addresses are not provisioned yet (missing user agent).",
+                },
+            }
+        if need_evm or need_sol:
             plat = OneClawPlatformClient.from_settings(settings)
-            if maybe_backfill_solana_wallet_from_signing_keys(
+            eth_w, sol_w = maybe_backfill_hosted_wallet_columns_from_signing_keys(
                 db,
                 plat,
                 row,
+                force_evm=need_evm,
+                force_sol=need_sol,
                 reason="tool_get_hosted_wallet_addresses",
-            ):
-                backfilled = True
-                db.commit()
-            else:
-                db.rollback()
-
-        if want_eth and not (row.wallet_address or "").strip() and aid:
-            plat = OneClawPlatformClient.from_settings(settings)
-            if maybe_backfill_wallet_from_signing_keys(
-                db,
-                plat,
-                row,
-                reason="tool_get_hosted_wallet_addresses",
-            ):
+                settings=settings,
+                oneclaw_http=runtime.oneclaw_evm_signer,
+            )
+            if eth_w is not None or sol_w is not None:
                 backfilled = True
                 db.commit()
             else:

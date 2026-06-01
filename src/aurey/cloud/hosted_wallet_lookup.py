@@ -6,6 +6,7 @@ Shared between Telegram Deep Agent invokes and Telegram Mini App read-only portf
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,31 +17,37 @@ from aurey.settings import AureySettings
 _log = logging.getLogger(__name__)
 
 
-def backfill_hosted_wallet_from_signing_keys_if_empty(
+def backfill_hosted_wallets_from_signing_keys_if_empty(
     session: Session,
     settings: AureySettings,
     row: HostedPlatformUserORM,
     *,
     reason: str,
+    oneclaw_http: Any | None = None,
 ) -> None:
-    """If ``wallet_address`` is empty but ``user_agent_id`` is set, try Platform signing-keys lookup.
+    """If EVM or Solana columns are empty, one signing-keys GET may fill both (same as provision).
 
-    On success commits ``session``. On failure rolls back and logs at debug — row remains without wallet.
-
-    Mirrors the try/except block inside ``hosted_invoke_bundle_for_telegram_user``.
+    On success commits ``session``. On failure rolls back and logs at debug.
     """
 
-    if (row.wallet_address or "").strip():
+    if (row.wallet_address or "").strip() and (row.solana_wallet_address or "").strip():
         return
     if not (row.user_agent_id or "").strip():
         return
 
     from aurey.cloud.platform_client import OneClawPlatformClient
-    from aurey.cloud.wallet_sync import maybe_backfill_wallet_from_signing_keys
+    from aurey.cloud.wallet_sync import maybe_backfill_hosted_wallet_columns_from_signing_keys
 
     try:
         plat = OneClawPlatformClient.from_settings(settings)
-        maybe_backfill_wallet_from_signing_keys(session, plat, row, reason=reason)
+        maybe_backfill_hosted_wallet_columns_from_signing_keys(
+            session,
+            plat,
+            row,
+            reason=reason,
+            settings=settings,
+            oneclaw_http=oneclaw_http,
+        )
         session.flush()
         session.commit()
     except Exception:
@@ -53,6 +60,25 @@ def backfill_hosted_wallet_from_signing_keys_if_empty(
         )
 
 
+def backfill_hosted_wallet_from_signing_keys_if_empty(
+    session: Session,
+    settings: AureySettings,
+    row: HostedPlatformUserORM,
+    *,
+    reason: str,
+    oneclaw_http: Any | None = None,
+) -> None:
+    """Alias for :func:`backfill_hosted_wallets_from_signing_keys_if_empty`."""
+
+    backfill_hosted_wallets_from_signing_keys_if_empty(
+        session,
+        settings,
+        row,
+        reason=reason,
+        oneclaw_http=oneclaw_http,
+    )
+
+
 def load_hosted_platform_user_row_for_telegram(
     session: Session,
     settings: AureySettings,
@@ -60,6 +86,7 @@ def load_hosted_platform_user_row_for_telegram(
     telegram_user_id: int,
     reason: str,
     allow_wallet_backfill: bool = True,
+    oneclaw_http: Any | None = None,
 ) -> HostedPlatformUserORM | None:
     """Fetch ``hosted_platform_users`` row and optional signing-keys wallet backfill."""
 
@@ -71,11 +98,18 @@ def load_hosted_platform_user_row_for_telegram(
     if row is None:
         return None
     if allow_wallet_backfill:
-        backfill_hosted_wallet_from_signing_keys_if_empty(session, settings, row, reason=reason)
+        backfill_hosted_wallets_from_signing_keys_if_empty(
+            session,
+            settings,
+            row,
+            reason=reason,
+            oneclaw_http=oneclaw_http,
+        )
     return row
 
 
 __all__ = [
     "backfill_hosted_wallet_from_signing_keys_if_empty",
+    "backfill_hosted_wallets_from_signing_keys_if_empty",
     "load_hosted_platform_user_row_for_telegram",
 ]
