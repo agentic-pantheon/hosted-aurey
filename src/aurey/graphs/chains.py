@@ -25,6 +25,7 @@ CHAIN_INDEX: dict[str, ChainInfo] = {
     "linea": ChainInfo("linea", 59144, "linea-mainnet"),
     "mantle": ChainInfo("mantle", 5000, "mantle-mainnet"),
     "monad": ChainInfo("monad", 143, "monad-mainnet"),
+    "optimism": ChainInfo("optimism", 10, "opt-mainnet"),
     "plasma": ChainInfo("plasma", 9745, "plasma-mainnet"),
     "polygon": ChainInfo("polygon", 137, "polygon-mainnet"),
     "scroll": ChainInfo("scroll", 534352, "scroll-mainnet"),

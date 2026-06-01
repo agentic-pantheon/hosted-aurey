@@ -7,8 +7,11 @@ from functools import lru_cache
 from importlib.resources import files
 from typing import Any, NamedTuple, cast
 
-from aurey.graphs.chains import chain_id_for
+from collections.abc import Iterator
+
+from aurey.graphs.chains import chain_id_for, chain_name_for_id
 from aurey.graphs.evm_codec import normalize_evm_address
+from aurey.known_addresses.names import normalize_token_lookup_name
 
 
 class KnownToken(NamedTuple):
@@ -37,6 +40,61 @@ def load_known_addresses() -> dict[str, Any]:
     """Return the parsed catalog (copy-friendly root dict)."""
 
     return dict(_cached_document())
+
+
+def chain_slug_for_catalog_chain_id(chain_id: int, doc: dict[str, Any] | None = None) -> str | None:
+    """Resolve chain slug from ``chain_name_to_id`` in the catalog, else :func:`chain_name_for_id`."""
+
+    catalog = doc if doc is not None else _cached_document()
+    mapping = catalog.get("chain_name_to_id")
+    if isinstance(mapping, dict):
+        for slug, raw_id in mapping.items():
+            try:
+                if int(raw_id) == chain_id:
+                    return str(slug).strip().lower()
+            except (TypeError, ValueError):
+                continue
+    return chain_name_for_id(chain_id)
+
+
+def iter_catalog_tokens(
+    doc: dict[str, Any] | None = None,
+) -> Iterator[tuple[str, str, str, str]]:
+    """Yield ``(chain_slug, symbol, human_name, address)`` for every token in the bundled JSON."""
+
+    catalog = doc if doc is not None else _cached_document()
+    chains = catalog.get("chains")
+    if not isinstance(chains, dict):
+        return
+
+    for cid_str, block in chains.items():
+        if not isinstance(block, dict):
+            continue
+        try:
+            cid = int(cid_str)
+        except ValueError:
+            continue
+        slug = chain_slug_for_catalog_chain_id(cid, catalog)
+        if slug is None:
+            continue
+        toks = block.get("tokens")
+        if not isinstance(toks, dict):
+            continue
+        for sym, row in toks.items():
+            if not isinstance(row, dict):
+                continue
+            addr = row.get("address")
+            if not isinstance(addr, str) or not addr.strip():
+                continue
+            try:
+                norm = normalize_evm_address(addr)
+            except ValueError:
+                continue
+            if norm == "0x0000000000000000000000000000000000000000":
+                continue
+            name = row.get("name")
+            display = str(name).strip() if name is not None else str(sym)
+            yield slug, str(sym), display, norm
 
 
 def _validate_and_normalize(doc: dict[str, Any]) -> None:
@@ -119,6 +177,48 @@ def lookup_known_token(chain_slug: str, ticker: str) -> KnownToken | None:
         address=normalize_evm_address(addr),
         name=str(name) if name is not None else hit_key,
     )
+
+
+def lookup_known_token_by_name(chain_slug: str, token_name: str) -> KnownToken | None:
+    """Resolve by bundled ``name`` on a chain (exact normalized match; allowlist only)."""
+
+    cid_int = chain_id_for(chain_slug.strip().lower())
+    if cid_int is None:
+        return None
+
+    needle = normalize_token_lookup_name(token_name)
+    if not needle:
+        return None
+
+    doc = _cached_document()
+    chains = cast(dict[str, Any], doc["chains"])
+    block = chains.get(str(cid_int))
+    if not isinstance(block, dict):
+        return None
+
+    symbols = cast(dict[str, Any], block.get("tokens") or {})
+    matches: list[KnownToken] = []
+    for sym, row in symbols.items():
+        if not isinstance(row, dict):
+            continue
+        addr = row.get("address")
+        if not isinstance(addr, str):
+            continue
+        display = row.get("name")
+        label = str(display) if display is not None else str(sym)
+        if normalize_token_lookup_name(label) != needle:
+            continue
+        matches.append(
+            KnownToken(
+                symbol=str(sym),
+                address=normalize_evm_address(addr),
+                name=label,
+            )
+        )
+    if not matches:
+        return None
+    matches.sort(key=lambda t: t.symbol.upper())
+    return matches[0]
 
 
 def lookup_known_token_by_address(chain_slug: str, token_address: str) -> KnownToken | None:

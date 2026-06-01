@@ -174,16 +174,26 @@ def test_resolve_known_address_tool_fake_runtime():
     _assert_no_banned_values(out)
 
 
-def test_evm_get_erc20_balance_tool_stub():
-    signing_path = "vault/signing/local"
-    secrets = {signing_path: "0x" + "ff" * 32}
-    settings = AureySettings(
-        wallet_signing_key_secret_path=signing_path,
-    )
+def test_evm_get_erc20_balance_tool():
+    alchemy_path = "vault/alchemy"
+    secrets = {alchemy_path: "INJECTED_ALCHEMY_KEY_AAA"}
+    wallet = "0x00000000000000000000000000000000000000aa"
+    token = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    one_usdc_raw = 1_000_000
+
+    def eth_call(params: list) -> str:
+        data = params[0]["data"]
+        if data == "0x313ce567":
+            return "0x0000000000000000000000000000000000000000000000000000000000000006"
+        if data.startswith("0x70a08231"):
+            return "0x" + f"{one_usdc_raw:064x}"
+        raise AssertionError(f"unexpected calldata {data}")
+
+    settings = AureySettings(alchemy_api_secret_path=alchemy_path)
     runtime = AureyRuntime(
         settings=settings,
         secret_store=FakeSecretStore(secrets),
-        evm_rpc_factory=rpc_factory_from_mapping({}),
+        evm_rpc_factory=rpc_factory_from_mapping({"eth_call": eth_call}),
         http=ScriptedHttpClient(),
         tx_pipeline=DeterministicTxPipeline(),
         lifi_base_url="https://li.quest",
@@ -191,14 +201,16 @@ def test_evm_get_erc20_balance_tool_stub():
     tool = _tool_by_name(build_aurey_subgraph_tools(runtime), "evm_get_erc20_balance")
     out = tool.invoke(
         {
-            "chain": "ethereum",
-            "wallet_address": "0x00000000000000000000000000000000000000aa",
-            "token_address": "0x2222222222222222222222222222222222222222",
+            "chain": "base",
+            "wallet_address": wallet,
+            "token_address": token,
         }
     )
     assert out["ok"] is True
-    assert out["result"]["operation"] == "erc20_balance"
-    assert out["result"]["token_address"] == "0x2222222222222222222222222222222222222222"
+    assert out["result"]["decimals"] == 6
+    assert out["result"]["balance_raw"] == str(one_usdc_raw)
+    assert out["result"]["balance_human"] == "1"
+    assert out["result"]["token_address"] == token.lower()  # normalized, not EIP-55
     _assert_no_banned_values(out)
 
 

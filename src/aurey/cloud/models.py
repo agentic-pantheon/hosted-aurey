@@ -5,7 +5,20 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, Uuid, func, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -109,9 +122,65 @@ class HostedAccessRequestORM(Base):
     )
 
 
+class TokenRegistryORM(Base):
+    """Per-chain token metadata for symbol and address resolution."""
+
+    __tablename__ = "token_registry"
+    __table_args__ = (
+        UniqueConstraint("chain_slug", "address"),
+        Index("ix_token_registry_chain_slug_symbol", "chain_slug", "symbol"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    ecosystem: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="evm",
+        server_default=text("'evm'"),
+    )
+    chain_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    chain_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    address: Mapped[str] = mapped_column(String(255), nullable=False)
+    decimals: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    coingecko_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    market_cap_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    trust_tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    verified_onchain: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    cg_recognized: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 __all__ = [
     "Base",
     "HostedAccessRequestORM",
     "HostedEmailVerificationORM",
     "HostedPlatformUserORM",
+    "TokenRegistryORM",
 ]

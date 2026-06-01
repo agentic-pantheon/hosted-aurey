@@ -101,13 +101,31 @@ def bootstrap_aurey_service_state(settings: AureySettings | None = None) -> Aure
             raise AureyServiceBootstrapError(
                 "PostgreSQL checkpointer could not be initialized."
             ) from exc
-        hosted_session_factory = None
-        hosted_engine = None
-        if s.hosted_platform_enabled:
-            from aurey.cloud.session import make_engine, make_session_factory
+        from aurey.cloud.session import make_engine, make_session_factory
+        from aurey.token_registry.repository import TokenRegistryRepository
+        from aurey.token_registry.resolver import TokenResolver
 
-            hosted_engine = make_engine(s)
-            hosted_session_factory = make_session_factory(hosted_engine)
+        hosted_engine = make_engine(s)
+        registry_session_factory = make_session_factory(hosted_engine)
+        hosted_session_factory = (
+            registry_session_factory if s.hosted_platform_enabled else None
+        )
+        token_resolver = TokenResolver(
+            runtime=runtime,
+            repository=TokenRegistryRepository(registry_session_factory),
+        )
+        if token_resolver is not None:
+            runtime = AureyRuntime(
+                settings=runtime.settings,
+                secret_store=runtime.secret_store,
+                evm_rpc_factory=runtime.evm_rpc_factory,
+                http=runtime.http,
+                tx_pipeline=runtime.tx_pipeline,
+                oneclaw_evm_signer=runtime.oneclaw_evm_signer,
+                lifi_base_url=runtime.lifi_base_url,
+                prepared_txs=runtime.prepared_txs,
+                token_resolver=token_resolver,
+            )
         return AureyServiceState(
             settings=s,
             runtime=runtime,

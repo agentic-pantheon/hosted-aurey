@@ -310,6 +310,29 @@ class AureySettings(BaseSettings):
         ),
         validation_alias=AliasChoices("AUREY_ZERION_API_KEY"),
     )
+    coingecko_api_key: str | None = Field(
+        default=None,
+        description=(
+            "CoinGecko demo API key for token allowlist sync and contract enrichment "
+            "(``AUREY_COINGECKO_API_KEY``)."
+        ),
+        validation_alias=AliasChoices("AUREY_COINGECKO_API_KEY"),
+    )
+    coingecko_api_secret_path: str | None = Field(
+        default=None,
+        description="Optional 1Claw vault path for the CoinGecko demo API key.",
+    )
+    coingecko_allowlist_size: int = Field(
+        default=150,
+        ge=1,
+        le=250,
+        description="Max coins fetched from CoinGecko markets for the indexed allowlist.",
+    )
+    coingecko_market_cap_floor_usd: float = Field(
+        default=50_000_000.0,
+        ge=0.0,
+        description="Minimum market cap (USD) for a coin to be indexed on a chain.",
+    )
     lifi_integrator: str = Field(
         default="aurey",
         description=(
@@ -474,6 +497,7 @@ class AureySettings(BaseSettings):
         "lifi_api_key",
         "telegram_bot_token",
         "zerion_api_key",
+        "coingecko_api_key",
         mode="before",
     )
     @classmethod

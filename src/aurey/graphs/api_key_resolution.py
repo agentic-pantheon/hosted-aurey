@@ -97,3 +97,41 @@ def effective_lifi_api_key(
             details=secret_unavailable_graph_details(secret_kind="lifi_api", exc=exc),
         ).model_dump()
         return None, err
+
+
+def effective_coingecko_api_key(
+    settings: AureySettings,
+    secret_store: _SecretStoreProto,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Resolve CoinGecko demo API key from env or vault path."""
+
+    env_key = (settings.coingecko_api_key or "").strip()
+    if env_key:
+        return env_key, None
+
+    path = settings.coingecko_api_secret_path
+    if path is None or not str(path).strip():
+        err = GraphErrorBody(
+            code="secret_not_configured",
+            message="CoinGecko API secret path is not configured.",
+            details={"secret_kind": "coingecko_api"},
+        ).model_dump()
+        return None, err
+
+    path_s = str(path).strip()
+    try:
+        return secret_store.get_secret(path_s).reveal().strip(), None
+    except SecretNotFoundError:
+        err = GraphErrorBody(
+            code="secret_not_found",
+            message="CoinGecko API secret could not be resolved.",
+            details={"secret_kind": "coingecko_api"},
+        ).model_dump()
+        return None, err
+    except SecretStoreUnavailableError as exc:
+        err = GraphErrorBody(
+            code="secret_unavailable",
+            message="Secret store unavailable while resolving CoinGecko API key.",
+            details=secret_unavailable_graph_details(secret_kind="coingecko_api", exc=exc),
+        ).model_dump()
+        return None, err

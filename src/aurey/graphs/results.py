@@ -49,6 +49,52 @@ class NativeBalanceResult(BaseModel):
     balance_eth: str
 
 
+class SupportedTokenEntry(BaseModel):
+    """One allowlisted token deployment on a chain."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    name: str
+    address: str
+    trust_tier: str
+    source: str
+
+
+class SupportedTokensOnChainResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    chain: str
+    chain_id: int | None
+    token_count: int
+    tokens: list[SupportedTokenEntry]
+
+
+class SupportedTokenChainRef(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    chain: str
+    name: str
+    address: str
+    trust_tier: str
+    source: str
+
+
+class SupportedSymbolGroup(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    chains: list[SupportedTokenChainRef]
+
+
+class SupportedTokensGroupedResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    symbol_count: int
+    deployment_count: int
+    symbols: list[SupportedSymbolGroup]
+
+
 class KnownAddressResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -57,6 +103,12 @@ class KnownAddressResult(BaseModel):
     symbol: str
     name: str
     resolved_address: str
+    source: str | None = None
+    trust_tier: str | None = None
+    verified_onchain: bool | None = None
+    cg_recognized: bool | None = None
+    warning: str | None = None
+    decimals: int | None = None
 
 
 class EnsResolveResult(BaseModel):
@@ -79,6 +131,20 @@ class Erc20DecimalsResult(BaseModel):
     chain_id: int
     token_address: str
     decimals: int = Field(ge=0, le=255)
+
+
+class Erc20BalanceResult(BaseModel):
+    """ERC-20 ``balanceOf(wallet)`` via ``eth_call`` (on-chain source of truth)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    chain: str
+    chain_id: int
+    wallet_address: str
+    token_address: str
+    decimals: int = Field(ge=0, le=255)
+    balance_raw: str = Field(pattern=r"^[0-9]+$")
+    balance_human: str
 
 
 class Erc20ReadPlaceholder(BaseModel):

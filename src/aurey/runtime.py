@@ -92,3 +92,4 @@ class AureyRuntime:
     oneclaw_evm_signer: OneClawEvmTransactionSigner | None = None
     lifi_base_url: str = "https://li.quest"
     prepared_txs: PreparedTransactionStore = field(default_factory=PreparedTransactionStore)
+    token_resolver: "TokenResolver | None" = None

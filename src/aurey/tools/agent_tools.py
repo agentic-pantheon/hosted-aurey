@@ -604,13 +604,42 @@ class EvmGetNativeBalanceArgs(BaseModel):
 
 
 class ResolveKnownAddressArgs(BaseModel):
-    """Map a known ticker to a contract address (bundled mapping; no Alchemy call)."""
+    """Map a known ticker to a contract address (allowlist; no Alchemy call)."""
 
     chain: str = Field(min_length=1, description="Chain slug.")
     known_ticker: str = Field(
         min_length=1,
         description="Ticker key, e.g. usdc, weth.",
     )
+
+
+class ListSupportedTokensArgs(BaseModel):
+    """List Aurey-supported allowlist tokens (curated + indexed; not discovered)."""
+
+    chain: str | None = Field(
+        default=None,
+        description=(
+            "Chain slug (e.g. polygon, base). Omit or leave empty to list all symbols "
+            "with the chains where each is supported."
+        ),
+    )
+
+
+class ResolveTokenByNameArgs(BaseModel):
+    """Map a human-readable token name to contract metadata (allowlist; exact match)."""
+
+    chain: str = Field(min_length=1, description="Chain slug.")
+    token_name: str = Field(
+        min_length=1,
+        description='Display name, e.g. "USD Coin" (case/spacing normalized).',
+    )
+
+
+class ResolveTokenByAddressArgs(BaseModel):
+    """Verify and label an ERC-20 by contract address (on-chain + optional CoinGecko)."""
+
+    chain: str = Field(min_length=1, description="Chain slug.")
+    token_address: str = Field(min_length=1, description="ERC-20 contract (0x).")
 
 
 class EvmGetErc20BalanceArgs(BaseModel):
@@ -673,15 +702,60 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
 
     @tool(args_schema=ResolveKnownAddressArgs)
     def resolve_known_address(chain: str, known_ticker: str) -> dict[str, Any]:
-        """Map a bundled ticker (e.g. USDC) to contract metadata from ``known_addresses.json``.
+        """Map a ticker (e.g. USDC) to contract metadata from the curated allowlist + indexed DB.
 
         Call this **before** stating or using a ``0x`` for a named symbol on a chain; do not
-        guess addresses. Offline lookup (does not call Alchemy)."""
+        guess addresses. If the ticker is not allowlisted, ask the user for the full ``0x`` and
+        use ``resolve_token_by_address``. Does not call Alchemy."""
         payload = ResolveKnownAddressArgs(chain=chain, known_ticker=known_ticker)
         graph_in = ReadGraphInput(
             operation="known_address",
             chain=payload.chain,
             known_ticker=payload.known_ticker,
+        )
+        return _graph_payload(read_g.invoke({"input": graph_in.model_dump()}))
+
+    @tool(args_schema=ListSupportedTokensArgs)
+    def list_supported_tokens(chain: str | None = None) -> dict[str, Any]:
+        """List tokens Aurey can resolve by symbol on the allowlist (bundled + market-cap index).
+
+        With ``chain`` (e.g. polygon): tokens on that chain only. Without ``chain``: every symbol
+        with which chains it is listed. Does not include one-off ``discovered`` address cache rows."""
+        payload = ListSupportedTokensArgs(chain=chain)
+        slug = (payload.chain or "").strip().lower() or None
+        graph_in = ReadGraphInput(
+            operation="list_supported_tokens",
+            chain=slug or "catalog",
+            list_supported_chain=slug,
+        )
+        return _graph_payload(read_g.invoke({"input": graph_in.model_dump()}))
+
+    @tool(args_schema=ResolveTokenByNameArgs)
+    def resolve_token_by_name(chain: str, token_name: str) -> dict[str, Any]:
+        """Map a token display name (e.g. \"USD Coin\") to contract metadata on the allowlist.
+
+        Exact normalized match only (not fuzzy). Prefer ``resolve_known_address`` when the
+        user gives a ticker. On failure, ask for ticker or ``0x``, then ``resolve_token_by_address``."""
+        payload = ResolveTokenByNameArgs(chain=chain, token_name=token_name)
+        graph_in = ReadGraphInput(
+            operation="token_by_name",
+            chain=payload.chain,
+            token_name=payload.token_name,
+        )
+        return _graph_payload(read_g.invoke({"input": graph_in.model_dump()}))
+
+    @tool(args_schema=ResolveTokenByAddressArgs)
+    def resolve_token_by_address(chain: str, token_address: str) -> dict[str, Any]:
+        """Verify an ERC-20 contract on-chain and return metadata (may cache as discovered).
+
+        Use when the user supplies a ``0x`` or when ``resolve_known_address`` fails. Requires
+        Alchemy RPC and ``DATABASE_URL`` for caching. Check ``warning`` / ``trust_tier`` in the
+        result before trading."""
+        payload = ResolveTokenByAddressArgs(chain=chain, token_address=token_address)
+        graph_in = ReadGraphInput(
+            operation="token_by_address",
+            chain=payload.chain,
+            token_address=payload.token_address,
         )
         return _graph_payload(read_g.invoke({"input": graph_in.model_dump()}))
 
@@ -736,6 +810,9 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         evm_get_erc20_decimals,
         evm_resolve_ens,
         resolve_known_address,
+        list_supported_tokens,
+        resolve_token_by_name,
+        resolve_token_by_address,
         evm_get_erc20_balance,
     ]
 
@@ -1544,6 +1621,9 @@ __all__ = [
     "EvmGetNativeBalanceArgs",
     "EvmResolveEnsArgs",
     "ResolveKnownAddressArgs",
+    "ListSupportedTokensArgs",
+    "ResolveTokenByNameArgs",
+    "ResolveTokenByAddressArgs",
     "SwapPrepareInput",
     "TxPrepareErc20ApprovalArgs",
     "TxPrepareErc20TransferArgs",
