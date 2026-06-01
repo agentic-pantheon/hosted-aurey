@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from aurey.cloud.models import TokenRegistryORM
 from aurey.graphs.chains import chain_id_for
 from aurey.graphs.evm_codec import to_checksum_evm_address
+from aurey.known_addresses.names import normalize_token_lookup_name
 
 ALLOWLIST_TIERS = frozenset({"curated", "indexed"})
 
@@ -74,6 +75,46 @@ class TokenRegistryRepository:
             )
             row = session.scalars(stmt).first()
             return None if row is None else _orm_to_row(row)
+
+    def lookup_name(self, chain_slug: str, token_name: str) -> TokenRow | None:
+        slug = chain_slug.strip().lower()
+        needle = normalize_token_lookup_name(token_name)
+        if not needle:
+            return None
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(TokenRegistryORM)
+                .where(
+                    TokenRegistryORM.chain_slug == slug,
+                    TokenRegistryORM.trust_tier.in_(tuple(ALLOWLIST_TIERS)),
+                    func.lower(TokenRegistryORM.name) == needle,
+                )
+                .order_by(
+                    case((TokenRegistryORM.trust_tier == "curated", 0), else_=1),
+                    TokenRegistryORM.market_cap_rank.asc().nulls_last(),
+                    TokenRegistryORM.symbol.asc(),
+                )
+            ).all()
+        if not rows:
+            return None
+        return _orm_to_row(rows[0])
+
+    def list_allowlist_rows(self, *, chain_slug: str | None = None) -> list[TokenRow]:
+        """All curated/indexed rows, optionally filtered to one chain slug."""
+
+        slug_filter = chain_slug.strip().lower() if chain_slug else None
+        with self._session_factory() as session:
+            stmt = select(TokenRegistryORM).where(
+                TokenRegistryORM.trust_tier.in_(tuple(ALLOWLIST_TIERS)),
+            )
+            if slug_filter is not None:
+                stmt = stmt.where(TokenRegistryORM.chain_slug == slug_filter)
+            stmt = stmt.order_by(
+                TokenRegistryORM.chain_slug.asc(),
+                TokenRegistryORM.symbol.asc(),
+            )
+            rows = session.scalars(stmt).all()
+        return [_orm_to_row(r) for r in rows]
 
     def lookup_address(self, chain_slug: str, address: str) -> TokenRow | None:
         slug = chain_slug.strip().lower()

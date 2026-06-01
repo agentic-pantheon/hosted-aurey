@@ -21,19 +21,26 @@ from aurey.graphs.ens_eth import (
 from aurey.graphs.evm_codec import (
     ERC20_DECIMALS_CALLDATA,
     decode_abi_uint256_word,
+    erc20_balance_of_calldata,
     format_token_units,
     normalize_evm_address,
     parse_evm_uint,
 )
 from aurey.graphs.results import (
     EnsResolveResult,
+    Erc20BalanceResult,
     Erc20DecimalsResult,
-    Erc20ReadPlaceholder,
     GraphErrorBody,
     KnownAddressResult,
     NativeBalanceResult,
+    SupportedTokenChainRef,
+    SupportedTokenEntry,
+    SupportedTokensGroupedResult,
+    SupportedTokensOnChainResult,
+    SupportedSymbolGroup,
 )
-from aurey.known_addresses.book import lookup_known_token
+from aurey.token_registry.catalog import list_grouped_by_symbol, list_on_chain
+from aurey.known_addresses.book import lookup_known_token, lookup_known_token_by_name
 from aurey.runtime import AureyRuntime
 
 
@@ -41,7 +48,9 @@ class ReadGraphInput(BaseModel):
     operation: Literal[
         "native_balance",
         "known_address",
+        "token_by_name",
         "token_by_address",
+        "list_supported_tokens",
         "erc20_balance",
         "erc20_decimals",
         "ens_resolve",
@@ -50,6 +59,11 @@ class ReadGraphInput(BaseModel):
     wallet_address: str | None = None
     token_address: str | None = None
     known_ticker: str | None = None
+    token_name: str | None = None
+    list_supported_chain: str | None = Field(
+        default=None,
+        description="When set, list allowlisted tokens on this chain only.",
+    )
     ens_name: str | None = None
 
 
@@ -121,6 +135,17 @@ def _validate_node(state: ReadGraphState) -> ReadGraphState:
             }
         return {}
 
+    if parsed.operation == "list_supported_tokens":
+        target = (parsed.list_supported_chain or "").strip().lower()
+        if target and chain_info(target) is None:
+            return {
+                "error": GraphErrorBody(
+                    code="unsupported_chain",
+                    message=f"Unsupported chain '{target}'.",
+                ).model_dump()
+            }
+        return {}
+
     if chain_info(chain) is None:
         return {
             "error": GraphErrorBody(
@@ -153,6 +178,14 @@ def _validate_node(state: ReadGraphState) -> ReadGraphState:
                 "error": GraphErrorBody(
                     code="invalid_input",
                     message="known_ticker is required for known_address.",
+                ).model_dump()
+            }
+    if parsed.operation == "token_by_name":
+        if not parsed.token_name or not str(parsed.token_name).strip():
+            return {
+                "error": GraphErrorBody(
+                    code="invalid_input",
+                    message="token_name is required for token_by_name.",
                 ).model_dump()
             }
     if parsed.operation == "token_by_address":
@@ -350,6 +383,100 @@ def _execute_node(runtime: AureyRuntime, state: ReadGraphState) -> ReadGraphStat
         )
         return {"result": result.model_dump()}
 
+    if parsed.operation == "list_supported_tokens":
+        repo = runtime.token_resolver._repo if runtime.token_resolver is not None else None
+        target = (parsed.list_supported_chain or "").strip().lower()
+        if target:
+            rows = list_on_chain(repository=repo, chain_slug=target)
+            entries = [
+                SupportedTokenEntry(
+                    symbol=r.symbol,
+                    name=r.name,
+                    address=r.address,
+                    trust_tier=r.trust_tier,
+                    source=r.source,
+                )
+                for r in rows
+            ]
+            out = SupportedTokensOnChainResult(
+                chain=target,
+                chain_id=chain_id_for(target),
+                token_count=len(entries),
+                tokens=entries,
+            )
+            return {"result": out.model_dump()}
+        grouped = list_grouped_by_symbol(repository=repo)
+        symbols = [
+            SupportedSymbolGroup(
+                symbol=sym,
+                chains=[
+                    SupportedTokenChainRef(
+                        chain=r.chain_slug,
+                        name=r.name,
+                        address=r.address,
+                        trust_tier=r.trust_tier,
+                        source=r.source,
+                    )
+                    for r in chain_rows
+                ],
+            )
+            for sym, chain_rows in grouped.items()
+        ]
+        deployment_count = sum(len(g.chains) for g in symbols)
+        out = SupportedTokensGroupedResult(
+            symbol_count=len(symbols),
+            deployment_count=deployment_count,
+            symbols=symbols,
+        )
+        return {"result": out.model_dump()}
+
+    if parsed.operation == "token_by_name":
+        display_name = (parsed.token_name or "").strip()
+        resolved = None
+        if runtime.token_resolver is not None:
+            resolved = runtime.token_resolver.resolve_name(chain, display_name)
+        if resolved is None:
+            hit = lookup_known_token_by_name(chain, display_name)
+            if hit is None:
+                return {
+                    "error": GraphErrorBody(
+                        code="invalid_input",
+                        message=(
+                            "Unknown token name for this chain (not in the allowlist). "
+                            "Ask for the ticker symbol (e.g. USDC) or the full contract address (0x…)."
+                        ),
+                        details={"token_name": display_name, "chain": chain},
+                    ).model_dump()
+                }
+                cid = chain_id_for(chain)
+                assert cid is not None
+                result = KnownAddressResult(
+                    chain=chain,
+                    ticker=hit.symbol,
+                    symbol=hit.symbol,
+                    name=hit.name,
+                    resolved_address=hit.address,
+                    source="bundled",
+                    trust_tier="curated",
+                    verified_onchain=True,
+                    cg_recognized=True,
+                )
+                return {"result": result.model_dump()}
+        result = KnownAddressResult(
+            chain=chain,
+            ticker=resolved.symbol,
+            symbol=resolved.symbol,
+            name=resolved.name,
+            resolved_address=resolved.address,
+            source=resolved.source,
+            trust_tier=resolved.trust_tier,
+            verified_onchain=resolved.verified_onchain,
+            cg_recognized=resolved.cg_recognized,
+            warning=resolved.warning,
+            decimals=resolved.decimals,
+        )
+        return {"result": result.model_dump()}
+
     if parsed.operation == "token_by_address":
         token_addr = parsed.token_address or ""
         if runtime.token_resolver is None:
@@ -385,12 +512,65 @@ def _execute_node(runtime: AureyRuntime, state: ReadGraphState) -> ReadGraphStat
         return {"result": result.model_dump()}
 
     if parsed.operation == "erc20_balance":
-        placeholder = Erc20ReadPlaceholder(
+        rpc, err_body = _alchemy_rpc_or_error(runtime, chain)
+        if err_body is not None:
+            return {"error": err_body}
+        try:
+            wallet = normalize_evm_address(parsed.wallet_address or "")
+            token = normalize_evm_address(parsed.token_address or "")
+        except ValueError as exc:
+            return {
+                "error": GraphErrorBody(
+                    code="invalid_input",
+                    message="Invalid wallet or token address.",
+                    details={"reason": str(exc)},
+                ).model_dump()
+            }
+        try:
+            raw_decimals = rpc.call(
+                "eth_call",
+                [{"to": token, "data": ERC20_DECIMALS_CALLDATA}, "latest"],
+            )
+            if not isinstance(raw_decimals, str):
+                raise TypeError("unexpected eth_call result type")
+            decimals = decode_abi_uint256_word(raw_decimals)
+            if decimals > 255:
+                raise ValueError("decimals out of range")
+            raw_balance = rpc.call(
+                "eth_call",
+                [{"to": token, "data": erc20_balance_of_calldata(wallet)}, "latest"],
+            )
+            if not isinstance(raw_balance, str):
+                raise TypeError("unexpected eth_call result type")
+            balance_raw = decode_abi_uint256_word(raw_balance)
+        except ValueError:
+            return {
+                "error": GraphErrorBody(
+                    code="rpc_error",
+                    message="Could not decode ERC-20 balance or decimals eth_call result.",
+                    details={"token_address": token, "wallet_address": wallet},
+                ).model_dump()
+            }
+        except Exception:
+            return {
+                "error": GraphErrorBody(
+                    code="rpc_error",
+                    message="RPC eth_call for ERC-20 balanceOf/decimals failed.",
+                ).model_dump()
+            }
+
+        cid = chain_id_for(chain)
+        assert cid is not None
+        out = Erc20BalanceResult(
             chain=chain,
-            operation="erc20_balance",
-            token_address=normalize_evm_address(parsed.token_address or ""),
+            chain_id=cid,
+            wallet_address=wallet,
+            token_address=token,
+            decimals=int(decimals),
+            balance_raw=str(balance_raw),
+            balance_human=format_token_units(balance_raw, int(decimals)),
         )
-        return {"result": placeholder.model_dump()}
+        return {"result": out.model_dump()}
 
     if parsed.operation == "erc20_decimals":
         rpc, err_body = _alchemy_rpc_or_error(runtime, chain)

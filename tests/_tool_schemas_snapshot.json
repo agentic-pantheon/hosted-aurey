@@ -650,6 +650,26 @@
     "title": "LiFiStatusInput",
     "type": "object"
   },
+  "list_supported_tokens": {
+    "description": "List Aurey-supported allowlist tokens (curated + indexed; not discovered).",
+    "properties": {
+      "chain": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Chain slug (e.g. polygon, base). Omit or leave empty to list all symbols with the chains where each is supported.",
+        "title": "Chain"
+      }
+    },
+    "title": "ListSupportedTokensArgs",
+    "type": "object"
+  },
   "request_user_input": {
     "$defs": {
       "UserQuestion": {
@@ -741,6 +761,29 @@
       "token_address"
     ],
     "title": "ResolveTokenByAddressArgs",
+    "type": "object"
+  },
+  "resolve_token_by_name": {
+    "description": "Map a human-readable token name to contract metadata (allowlist; exact match).",
+    "properties": {
+      "chain": {
+        "description": "Chain slug.",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "token_name": {
+        "description": "Display name, e.g. \"USD Coin\" (case/spacing normalized).",
+        "minLength": 1,
+        "title": "Token Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "token_name"
+    ],
+    "title": "ResolveTokenByNameArgs",
     "type": "object"
   },
   "swap_prepare": {

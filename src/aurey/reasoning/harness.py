@@ -15,8 +15,9 @@ AUREY_DEEP_HARNESS_BASE = (
     "the sell token ``token_address`` for ERC-20 sells; for **native ETH** sells use "
     "``sell_kind=native_eth`` (omit ``token_address``) and use ``amount_raw`` (wei) as "
     "``from_amount_wei``. Do not hand-compute or use balance unless they ask for max sell.\n"
-    "- For **balances / holdings**, call ``alchemy_get_portfolio_tokens`` and include **``native_balance``** "
-    "for gas ETH, not only ``tokens``.\n"
+    "- **One token balance:** resolve the token, then ``evm_get_erc20_balance``; use "
+    "``evm_get_native_balance`` for gas ETH. **Full wallet:** ``alchemy_get_portfolio_tokens`` "
+    "(include **``native_balance``**).\n"
     "- **request_user_input** is for blocking missing information only - keep questions minimal.\n"
     "Do not read or edit local files, spawn subagents, or run shell commands."
 )

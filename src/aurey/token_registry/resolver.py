@@ -8,10 +8,15 @@ from typing import Any
 from aurey.graphs.api_key_resolution import effective_alchemy_api_key, effective_coingecko_api_key
 from aurey.graphs.chains import alchemy_rpc_url_for_chain, chain_id_for, chain_info
 from aurey.graphs.evm_codec import normalize_evm_address, to_checksum_evm_address
-from aurey.known_addresses.book import KnownToken, lookup_known_token
+from aurey.known_addresses.book import (
+    KnownToken,
+    lookup_known_token,
+    lookup_known_token_by_name,
+)
 from aurey.runtime import AureyRuntime
 from aurey.token_registry.coingecko import CoinGeckoClient
 from aurey.token_registry.onchain import read_erc20_decimals
+from aurey.token_registry.catalog import list_grouped_by_symbol, list_on_chain
 from aurey.token_registry.repository import TokenRegistryRepository, TokenRow
 
 
@@ -90,12 +95,30 @@ class TokenResolver:
         self._runtime = runtime
         self._repo = repository
 
+    def list_supported_on_chain(self, chain_slug: str) -> list[TokenRow]:
+        return list_on_chain(repository=self._repo, chain_slug=chain_slug)
+
+    def list_supported_grouped_by_symbol(self) -> dict[str, list[TokenRow]]:
+        return list_grouped_by_symbol(repository=self._repo)
+
     def resolve_symbol(self, chain_slug: str, symbol: str) -> ResolvedToken | None:
         slug = chain_slug.strip().lower()
         hit = lookup_known_token(slug, symbol)
         if hit is not None:
             return _from_known(hit, slug)
         row = self._repo.lookup_symbol(slug, symbol)
+        if row is None:
+            return None
+        return _from_row(row)
+
+    def resolve_name(self, chain_slug: str, token_name: str) -> ResolvedToken | None:
+        """Resolve by human-readable name (allowlist only; exact normalized match)."""
+
+        slug = chain_slug.strip().lower()
+        hit = lookup_known_token_by_name(slug, token_name)
+        if hit is not None:
+            return _from_known(hit, slug)
+        row = self._repo.lookup_name(slug, token_name)
         if row is None:
             return None
         return _from_row(row)
