@@ -59,6 +59,7 @@ class SupportedTokenEntry(BaseModel):
     address: str
     trust_tier: str
     source: str
+    lifi_supported: bool = False
 
 
 class SupportedTokensOnChainResult(BaseModel):
@@ -78,6 +79,7 @@ class SupportedTokenChainRef(BaseModel):
     address: str
     trust_tier: str
     source: str
+    lifi_supported: bool = False
 
 
 class SupportedSymbolGroup(BaseModel):
@@ -107,6 +109,7 @@ class KnownAddressResult(BaseModel):
     trust_tier: str | None = None
     verified_onchain: bool | None = None
     cg_recognized: bool | None = None
+    lifi_supported: bool | None = None
     warning: str | None = None
     decimals: int | None = None
 

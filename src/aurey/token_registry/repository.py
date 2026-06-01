@@ -31,6 +31,7 @@ class TokenRow:
     trust_tier: str
     verified_onchain: bool
     cg_recognized: bool
+    lifi_supported: bool = False
 
 
 def _orm_to_row(row: TokenRegistryORM) -> TokenRow:
@@ -47,6 +48,7 @@ def _orm_to_row(row: TokenRegistryORM) -> TokenRow:
         trust_tier=row.trust_tier,
         verified_onchain=row.verified_onchain,
         cg_recognized=row.cg_recognized,
+        lifi_supported=row.lifi_supported,
     )
 
 
@@ -115,6 +117,43 @@ class TokenRegistryRepository:
             )
             rows = session.scalars(stmt).all()
         return [_orm_to_row(r) for r in rows]
+
+    def apply_lifi_supported_flags(
+        self,
+        *,
+        supported: set[tuple[int, str]],
+        chain_slugs: frozenset[str],
+    ) -> tuple[int, int]:
+        """Set ``lifi_supported`` on curated/indexed rows for given chains from LiFi catalog."""
+
+        if not chain_slugs:
+            return (0, 0)
+        slugs = tuple(sorted(chain_slugs))
+        marked_true = 0
+        marked_false = 0
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(TokenRegistryORM).where(
+                    TokenRegistryORM.trust_tier.in_(tuple(ALLOWLIST_TIERS)),
+                    TokenRegistryORM.chain_slug.in_(slugs),
+                )
+            ).all()
+            for row in rows:
+                cid = row.chain_id if row.chain_id is not None else chain_id_for(row.chain_slug)
+                if cid is None:
+                    continue
+                want = (cid, row.address) in supported
+                if row.lifi_supported == want:
+                    continue
+                row.lifi_supported = want
+                row.updated_at = now
+                if want:
+                    marked_true += 1
+                else:
+                    marked_false += 1
+            session.commit()
+        return (marked_true, marked_false)
 
     def lookup_address(self, chain_slug: str, address: str) -> TokenRow | None:
         slug = chain_slug.strip().lower()

@@ -32,6 +32,7 @@ class ResolvedToken:
     trust_tier: str
     verified_onchain: bool
     cg_recognized: bool
+    lifi_supported: bool = False
     warning: str | None = None
 
 
@@ -63,6 +64,7 @@ def _from_known(hit: KnownToken, chain_slug: str) -> ResolvedToken:
         trust_tier="curated",
         verified_onchain=True,
         cg_recognized=True,
+        lifi_supported=False,
         warning=None,
     )
 
@@ -81,6 +83,7 @@ def _from_row(row: TokenRow) -> ResolvedToken:
         trust_tier=row.trust_tier,
         verified_onchain=row.verified_onchain,
         cg_recognized=row.cg_recognized,
+        lifi_supported=row.lifi_supported,
         warning=_warning_for_tier(row.trust_tier),
     )
 
@@ -199,6 +202,7 @@ class TokenResolver:
                     trust_tier="discovered",
                     verified_onchain=True,
                     cg_recognized=cg_recognized,
+                    lifi_supported=False,
                     warning=_warning_for_tier("discovered"),
                 ),
                 None,

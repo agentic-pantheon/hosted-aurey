@@ -53,5 +53,8 @@ agentic_pantheon_business_strategy.md
 1claw-curls-beta.txt
 TODOS
 
+# Local LiFi catalog export (operator curl); sync job uses live API
+li_quest_tokens.json
+
 # JavaScript (Mini App)
 node_modules/
