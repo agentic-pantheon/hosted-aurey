@@ -603,6 +603,10 @@ _HEX_INLINE_BACKTICK_RE = re.compile(r"`(0x(?:[a-fA-F0-9]{64}|[a-fA-F0-9]{40}))`
 _SKIP_ANCHORS_AND_CODE_RE = re.compile(r"(<code>[\s\S]*?</code>|<a\b[^>]*>[\s\S]*?</a>)")
 _TX_HASH_RE = re.compile(r"\b(0x[a-fA-F0-9]{64})\b")
 _ADDRESS_RE = re.compile(r"\b(0x[a-fA-F0-9]{40})\b")
+# Solana pubkeys are base58; typical length 32–44 (most often 43–44).
+_SOLANA_PUBKEY_RE = re.compile(r"\b([1-9A-HJ-NP-Za-km-z]{32,44})\b")
+_SOLANA_INLINE_BACKTICK_RE = re.compile(r"`([1-9A-HJ-NP-Za-km-z]{32,44})`")
+_SOLANA_EXPLORER_BASE = "https://explorer.solana.com"
 
 _CHAIN_EXPLORER_BY_ID: dict[int, str] = {
     1: "https://etherscan.io",
@@ -679,6 +683,26 @@ def _explicit_explorer_base_for_line(line: str) -> str | None:
     return None
 
 
+def _line_signals_solana(line: str) -> bool:
+    return bool(re.search(r"(?i)\bsolana\b|\bsol\s+(?:wallet|address|pubkey)", line))
+
+
+def _link_solana_explorer_addresses(html_fragment: str) -> str:
+    """Wrap Solana pubkeys in Telegram-safe ``<a>`` (input HTML already escaped)."""
+
+    def _subs(segment: str) -> str:
+        def addr_repl(m: re.Match[str]) -> str:
+            a = m.group(1)
+            return f'<a href="{_SOLANA_EXPLORER_BASE}/address/{a}">{a}</a>'
+
+        return _SOLANA_PUBKEY_RE.sub(addr_repl, segment)
+
+    pieces = _SKIP_ANCHORS_AND_CODE_RE.split(html_fragment)
+    for i in range(0, len(pieces), 2):
+        pieces[i] = _subs(pieces[i])
+    return "".join(pieces)
+
+
 def _link_evm_explorer_entities(html_fragment: str, *, explorer_base: str) -> str:
     """Wrap tx hashes and addresses in Telegram-safe ``<a>`` (input HTML already escaped)."""
 
@@ -701,7 +725,7 @@ def _link_evm_explorer_entities(html_fragment: str, *, explorer_base: str) -> st
     return "".join(pieces)
 
 
-def _format_inline_markdown(text: str, *, explorer_base: str) -> str:
+def _format_inline_markdown(text: str, *, explorer_base: str, link_solana: bool = False) -> str:
     """Small Markdown subset to Telegram HTML, after escaping user/model text."""
 
     escaped = html.escape(text, quote=False)
@@ -713,9 +737,18 @@ def _format_inline_markdown(text: str, *, explorer_base: str) -> str:
         return f'<a href="{explorer_base}/address/{inner}">{inner}</a>'
 
     escaped = _HEX_INLINE_BACKTICK_RE.sub(_hex_backtick_repl, escaped)
+    if link_solana:
+
+        def _sol_backtick_repl(m: re.Match[str]) -> str:
+            inner = m.group(1)
+            return f'<a href="{_SOLANA_EXPLORER_BASE}/address/{inner}">{inner}</a>'
+
+        escaped = _SOLANA_INLINE_BACKTICK_RE.sub(_sol_backtick_repl, escaped)
     escaped = _INLINE_CODE_RE.sub(lambda m: f"<code>{m.group(1)}</code>", escaped)
     escaped = _BOLD_RE.sub(lambda m: f"<b>{m.group(1)}</b>", escaped)
     escaped = _link_evm_explorer_entities(escaped, explorer_base=explorer_base)
+    if link_solana:
+        escaped = _link_solana_explorer_addresses(escaped)
     return escaped
 
 
@@ -730,12 +763,15 @@ def format_telegram_message(text: str) -> str:
     in_code = False
     code_lines: list[str] = []
     sticky_explorer = _CHAIN_EXPLORER_BY_ID[1]
+    sticky_solana = False
 
     def _update_sticky(fragment: str) -> None:
-        nonlocal sticky_explorer
+        nonlocal sticky_explorer, sticky_solana
         cue = _explicit_explorer_base_for_line(fragment)
         if cue is not None:
             sticky_explorer = cue
+        if _line_signals_solana(fragment):
+            sticky_solana = True
 
     for raw in text.splitlines():
         line = raw.rstrip()
@@ -756,18 +792,18 @@ def format_telegram_message(text: str) -> str:
         if stripped.startswith("### "):
             body = stripped[4:]
             _update_sticky(body)
-            out.append(f"<b>{_format_inline_markdown(body, explorer_base=sticky_explorer)}</b>")
+            out.append(f"<b>{_format_inline_markdown(body, explorer_base=sticky_explorer, link_solana=sticky_solana)}</b>")
         elif stripped.startswith("## "):
             body = stripped[3:]
             _update_sticky(body)
-            out.append(f"<b>{_format_inline_markdown(body, explorer_base=sticky_explorer)}</b>")
+            out.append(f"<b>{_format_inline_markdown(body, explorer_base=sticky_explorer, link_solana=sticky_solana)}</b>")
         elif stripped.startswith("# "):
             body = stripped[2:]
             _update_sticky(body)
-            out.append(f"<b>{_format_inline_markdown(body, explorer_base=sticky_explorer)}</b>")
+            out.append(f"<b>{_format_inline_markdown(body, explorer_base=sticky_explorer, link_solana=sticky_solana)}</b>")
         else:
             _update_sticky(line)
-            out.append(_format_inline_markdown(line, explorer_base=sticky_explorer))
+            out.append(_format_inline_markdown(line, explorer_base=sticky_explorer, link_solana=sticky_solana))
 
     if in_code:
         out.append(f"<pre>{html.escape(chr(10).join(code_lines), quote=False)}</pre>")

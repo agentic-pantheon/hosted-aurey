@@ -235,6 +235,38 @@ def test_format_telegram_message_inherits_explorer_for_isolated_tx_line() -> Non
     assert formatted.count('<a href="https://basescan.org/') == 3
 
 
+def test_format_telegram_message_links_solana_address_to_explorer() -> None:
+    pubkey = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+    raw = f"Your **Solana** wallet address is {pubkey}."
+
+    formatted = format_telegram_message(raw)
+
+    assert (
+        f'<a href="https://explorer.solana.com/address/{pubkey}">{pubkey}</a>' in formatted
+    )
+
+
+def test_format_telegram_message_solana_context_sticky_on_following_lines() -> None:
+    pubkey = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+    raw = f"Solana wallet\n{pubkey}"
+
+    formatted = format_telegram_message(raw)
+
+    assert (
+        f'<a href="https://explorer.solana.com/address/{pubkey}">{pubkey}</a>' in formatted
+    )
+
+
+def test_format_telegram_message_does_not_link_solana_pubkey_without_context() -> None:
+    pubkey = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+    raw = f"Random token id {pubkey}"
+
+    formatted = format_telegram_message(raw)
+
+    assert "explorer.solana.com" not in formatted
+    assert pubkey in formatted
+
+
 def test_telegram_message_chunks_splits_long_text_before_formatting() -> None:
     raw = "a" * 5000
 
