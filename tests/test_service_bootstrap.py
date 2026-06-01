@@ -126,6 +126,15 @@ def test_bootstrap_uses_postgres_when_database_url(monkeypatch):
         return ManagedPostgresCheckpointer(saver=saver, _cm=cm)
 
     monkeypatch.setattr("aurey.service.bootstrap.open_postgres_checkpointer", fake_open)
+
+    def fake_make_engine(_settings):  # noqa: ANN001
+        return MagicMock()
+
+    def fake_make_session_factory(_engine):  # noqa: ANN001
+        return MagicMock()
+
+    monkeypatch.setattr("aurey.cloud.session.make_engine", fake_make_engine)
+    monkeypatch.setattr("aurey.cloud.session.make_session_factory", fake_make_session_factory)
     s = AureySettings(oneclaw_vault_id="v-pg", database_url="postgres://stub")
     state = bootstrap_aurey_service_state(s)
     cm = state._postgres._cm

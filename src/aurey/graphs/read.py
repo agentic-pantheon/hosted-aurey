@@ -41,6 +41,7 @@ class ReadGraphInput(BaseModel):
     operation: Literal[
         "native_balance",
         "known_address",
+        "token_by_address",
         "erc20_balance",
         "erc20_decimals",
         "ens_resolve",
@@ -152,6 +153,24 @@ def _validate_node(state: ReadGraphState) -> ReadGraphState:
                 "error": GraphErrorBody(
                     code="invalid_input",
                     message="known_ticker is required for known_address.",
+                ).model_dump()
+            }
+    if parsed.operation == "token_by_address":
+        if not parsed.token_address:
+            return {
+                "error": GraphErrorBody(
+                    code="invalid_input",
+                    message="token_address is required for token_by_address.",
+                ).model_dump()
+            }
+        try:
+            normalize_evm_address(parsed.token_address)
+        except ValueError as exc:
+            return {
+                "error": GraphErrorBody(
+                    code="invalid_input",
+                    message="Invalid token address.",
+                    details={"reason": str(exc)},
                 ).model_dump()
             }
     if parsed.operation == "erc20_balance":
@@ -286,23 +305,82 @@ def _execute_node(runtime: AureyRuntime, state: ReadGraphState) -> ReadGraphStat
 
     if parsed.operation == "known_address":
         ticker = parsed.known_ticker or ""
-        hit = lookup_known_token(chain, ticker)
-        if hit is None:
-            return {
-                "error": GraphErrorBody(
-                    code="invalid_input",
-                    message="Unknown ticker for this chain.",
-                    details={"ticker": ticker, "chain": chain},
-                ).model_dump()
-            }
-        cid = chain_id_for(chain)
-        assert cid is not None
+        resolved = None
+        if runtime.token_resolver is not None:
+            resolved = runtime.token_resolver.resolve_symbol(chain, ticker)
+        if resolved is None:
+            hit = lookup_known_token(chain, ticker)
+            if hit is None:
+                return {
+                    "error": GraphErrorBody(
+                        code="invalid_input",
+                        message=(
+                            "Unknown ticker for this chain (not in the allowlist). "
+                            "Ask the user for the full contract address (0x…)."
+                        ),
+                        details={"ticker": ticker, "chain": chain},
+                    ).model_dump()
+                }
+            cid = chain_id_for(chain)
+            assert cid is not None
+            result = KnownAddressResult(
+                chain=chain,
+                ticker=ticker.strip(),
+                symbol=hit.symbol,
+                name=hit.name,
+                resolved_address=hit.address,
+                source="bundled",
+                trust_tier="curated",
+                verified_onchain=True,
+                cg_recognized=True,
+            )
+            return {"result": result.model_dump()}
         result = KnownAddressResult(
             chain=chain,
             ticker=ticker.strip(),
-            symbol=hit.symbol,
-            name=hit.name,
-            resolved_address=hit.address,
+            symbol=resolved.symbol,
+            name=resolved.name,
+            resolved_address=resolved.address,
+            source=resolved.source,
+            trust_tier=resolved.trust_tier,
+            verified_onchain=resolved.verified_onchain,
+            cg_recognized=resolved.cg_recognized,
+            warning=resolved.warning,
+            decimals=resolved.decimals,
+        )
+        return {"result": result.model_dump()}
+
+    if parsed.operation == "token_by_address":
+        token_addr = parsed.token_address or ""
+        if runtime.token_resolver is None:
+            return {
+                "error": GraphErrorBody(
+                    code="not_implemented",
+                    message="Token registry requires DATABASE_URL.",
+                ).model_dump()
+            }
+        resolved, err = runtime.token_resolver.resolve_address(chain, token_addr)
+        if err is not None:
+            return {"error": GraphErrorBody(**err).model_dump()}
+        if resolved is None:
+            return {
+                "error": GraphErrorBody(
+                    code="invalid_input",
+                    message="Could not resolve token by address.",
+                ).model_dump()
+            }
+        result = KnownAddressResult(
+            chain=chain,
+            ticker=resolved.symbol,
+            symbol=resolved.symbol,
+            name=resolved.name,
+            resolved_address=resolved.address,
+            source=resolved.source,
+            trust_tier=resolved.trust_tier,
+            verified_onchain=resolved.verified_onchain,
+            cg_recognized=resolved.cg_recognized,
+            warning=resolved.warning,
+            decimals=resolved.decimals,
         )
         return {"result": result.model_dump()}
 

@@ -698,7 +698,7 @@
     "type": "object"
   },
   "resolve_known_address": {
-    "description": "Map a known ticker to a contract address (bundled mapping; no Alchemy call).",
+    "description": "Map a known ticker to a contract address (allowlist; no Alchemy call).",
     "properties": {
       "chain": {
         "description": "Chain slug.",
@@ -718,6 +718,29 @@
       "known_ticker"
     ],
     "title": "ResolveKnownAddressArgs",
+    "type": "object"
+  },
+  "resolve_token_by_address": {
+    "description": "Verify and label an ERC-20 by contract address (on-chain + optional CoinGecko).",
+    "properties": {
+      "chain": {
+        "description": "Chain slug.",
+        "minLength": 1,
+        "title": "Chain",
+        "type": "string"
+      },
+      "token_address": {
+        "description": "ERC-20 contract (0x).",
+        "minLength": 1,
+        "title": "Token Address",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chain",
+      "token_address"
+    ],
+    "title": "ResolveTokenByAddressArgs",
     "type": "object"
   },
   "swap_prepare": {

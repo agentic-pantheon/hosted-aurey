@@ -57,6 +57,12 @@ class KnownAddressResult(BaseModel):
     symbol: str
     name: str
     resolved_address: str
+    source: str | None = None
+    trust_tier: str | None = None
+    verified_onchain: bool | None = None
+    cg_recognized: bool | None = None
+    warning: str | None = None
+    decimals: int | None = None
 
 
 class EnsResolveResult(BaseModel):
