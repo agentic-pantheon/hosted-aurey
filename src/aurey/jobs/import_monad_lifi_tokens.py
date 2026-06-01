@@ -1,4 +1,7 @@
-"""Import Monad tokens from a local LiFi ``/v1/tokens`` JSON file into ``token_registry``."""
+"""[Legacy] Import Monad only from a local LiFi JSON file.
+
+Prefer ``sync_lifi_token_catalog`` (live API, all Aurey EVM chains + Solana when LiFi exposes it).
+"""
 
 from __future__ import annotations
 
@@ -47,7 +50,6 @@ def run_import(*, file_path: Path) -> int:
             address=entry.address,
             decimals=entry.decimals,
             coingecko_id=None,
-            market_cap_rank=None,
             source="lifi_catalog",
             trust_tier="indexed",
             verified_onchain=True,

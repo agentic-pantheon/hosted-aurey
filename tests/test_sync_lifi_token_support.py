@@ -42,7 +42,6 @@ def _insert_row(
             address=address,
             decimals=18,
             coingecko_id=None,
-            market_cap_rank=None,
             source="test",
             trust_tier=trust_tier,
             verified_onchain=True,

@@ -16,7 +16,6 @@ class TokenRegistrySeedEntry(NamedTuple):
     address: str
     decimals: int | None
     coingecko_id: str | None
-    market_cap_rank: int | None
     source: str
     trust_tier: str
 
@@ -68,7 +67,6 @@ def _entry_from_raw(item: dict[str, Any]) -> TokenRegistrySeedEntry:
     if trust_tier not in ("curated", "indexed"):
         raise ValueError(f"invalid trust_tier in seed bundle: {trust_tier!r}")
     decimals = _optional_int(item.get("decimals"))
-    market_cap_rank = _optional_int(item.get("market_cap_rank"))
     raw_cg = item.get("coingecko_id")
     coingecko_id = None if raw_cg is None else str(raw_cg).strip() or None
     return TokenRegistrySeedEntry(
@@ -78,7 +76,6 @@ def _entry_from_raw(item: dict[str, Any]) -> TokenRegistrySeedEntry:
         address=address,
         decimals=decimals,
         coingecko_id=coingecko_id,
-        market_cap_rank=market_cap_rank,
         source=source,
         trust_tier=trust_tier,
     )

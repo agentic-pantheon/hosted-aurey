@@ -60,7 +60,6 @@ def _insert_row(
     symbol: str,
     address: str,
     trust_tier: str,
-    market_cap_rank: int | None = None,
 ) -> None:
     now = datetime.now(UTC)
     session.add(
@@ -74,7 +73,6 @@ def _insert_row(
             address=address,
             decimals=6,
             coingecko_id="x",
-            market_cap_rank=market_cap_rank,
             source="bundled" if trust_tier == "curated" else "market_cap",
             trust_tier=trust_tier,
             verified_onchain=True,
@@ -102,7 +100,6 @@ def test_lookup_symbol_never_returns_discovered(registry_repo):
             symbol="USDC",
             address="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
             trust_tier="indexed",
-            market_cap_rank=10,
         )
     hit = repo.lookup_symbol("base", "SCAM")
     assert hit is None
@@ -111,7 +108,7 @@ def test_lookup_symbol_never_returns_discovered(registry_repo):
     assert hit_usdc.trust_tier == "indexed"
 
 
-def test_lookup_symbol_prefers_curated_rank(registry_repo):
+def test_lookup_symbol_prefers_curated_over_indexed(registry_repo):
     repo, factory = registry_repo
     with factory() as session:
         _insert_row(
@@ -120,7 +117,6 @@ def test_lookup_symbol_prefers_curated_rank(registry_repo):
             symbol="USDC",
             address="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
             trust_tier="curated",
-            market_cap_rank=999,
         )
         _insert_row(
             session,
@@ -128,7 +124,6 @@ def test_lookup_symbol_prefers_curated_rank(registry_repo):
             symbol="USDC",
             address="0x0000000000000000000000000000000000000002",
             trust_tier="indexed",
-            market_cap_rank=1,
         )
     hit = repo.lookup_symbol("ethereum", "USDC")
     assert hit is not None
@@ -146,7 +141,6 @@ def test_upsert_discovered_skips_when_curated_exists(registry_repo):
         address=curated_addr,
         decimals=6,
         coingecko_id="usd-coin",
-        market_cap_rank=5,
         source="bundled",
         trust_tier="curated",
     )

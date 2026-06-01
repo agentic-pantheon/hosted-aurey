@@ -1,4 +1,4 @@
-"""Sync top-by-market-cap tokens from CoinGecko into indexed allowlist rows."""
+"""[Deprecated] CoinGecko market-cap allowlist — use ``sync_lifi_token_catalog`` instead."""
 
 from __future__ import annotations
 
@@ -53,8 +53,6 @@ def run_sync() -> int:
     rows_written = 0
     for m in eligible:
         coin_id = str(m["id"])
-        rank = m.get("market_cap_rank")
-        rank_i = int(rank) if isinstance(rank, (int, float)) else None
         detail = client.fetch_coin_platforms(coin_id)
         time.sleep(_DETAIL_SLEEP_S)
         if detail is None:
@@ -69,7 +67,6 @@ def run_sync() -> int:
                 address=addr,
                 decimals=decimals,
                 coingecko_id=coin_id,
-                market_cap_rank=rank_i,
                 source="market_cap",
                 trust_tier="indexed",
                 verified_onchain=True,

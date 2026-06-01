@@ -150,7 +150,6 @@ class TokenRegistryORM(Base):
     address: Mapped[str] = mapped_column(String(255), nullable=False)
     decimals: Mapped[int | None] = mapped_column(Integer, nullable=True)
     coingecko_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    market_cap_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     trust_tier: Mapped[str] = mapped_column(String(32), nullable=False)
     verified_onchain: Mapped[bool] = mapped_column(

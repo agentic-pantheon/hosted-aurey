@@ -20,7 +20,6 @@ def _row_from_bundled(chain_slug: str, symbol: str, name: str, address: str) -> 
         address=address,
         decimals=None,
         coingecko_id=None,
-        market_cap_rank=None,
         source="bundled",
         trust_tier="curated",
         verified_onchain=True,
@@ -29,6 +28,8 @@ def _row_from_bundled(chain_slug: str, symbol: str, name: str, address: str) -> 
 
 
 def _merge_key(row: TokenRow) -> tuple[str, str]:
+    if row.ecosystem == "solana" or row.chain_slug == "solana":
+        return (row.chain_slug, row.address)
     return (row.chain_slug, row.address.lower())
 
 
@@ -36,28 +37,20 @@ def collect_allowlist_rows(
     *,
     repository: TokenRegistryRepository | None,
 ) -> list[TokenRow]:
-    """Curated + indexed rows from JSON and optional DB (DB does not downgrade bundled curated)."""
+    """Allowlist rows from DB (LiFi catalog) when connected; else bundled JSON fallback."""
+
+    if repository is not None:
+        return [
+            r
+            for r in repository.list_allowlist_rows()
+            if r.trust_tier in _ALLOWLIST_TIERS
+        ]
 
     merged: dict[tuple[str, str], TokenRow] = {}
     for chain_slug, symbol, name, address in iter_catalog_tokens():
         merged[_merge_key(_row_from_bundled(chain_slug, symbol, name, address))] = _row_from_bundled(
             chain_slug, symbol, name, address
         )
-    if repository is not None:
-        for row in repository.list_allowlist_rows():
-            if row.trust_tier not in _ALLOWLIST_TIERS:
-                continue
-            key = _merge_key(row)
-            existing = merged.get(key)
-            if existing is None:
-                merged[key] = row
-                continue
-            if existing.trust_tier == "curated":
-                continue
-            if row.trust_tier == "curated":
-                merged[key] = row
-                continue
-            merged[key] = row
     return list(merged.values())
 
 
@@ -68,7 +61,7 @@ def list_on_chain(
 ) -> list[TokenRow]:
     slug = chain_slug.strip().lower()
     rows = [r for r in collect_allowlist_rows(repository=repository) if r.chain_slug == slug]
-    rows.sort(key=lambda r: (r.symbol.upper(), r.trust_tier != "curated", r.market_cap_rank or 10**9))
+    rows.sort(key=lambda r: (r.symbol.upper(), r.trust_tier != "curated"))
     return rows
 
 
