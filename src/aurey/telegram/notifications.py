@@ -24,13 +24,30 @@ from aurey.telegram.client import resolve_telegram_bot_token
 
 _log = logging.getLogger(__name__)
 
+_proactive_notify_state: AureyServiceState | None = None
+_proactive_notify_loop: asyncio.AbstractEventLoop | None = None
+
 __all__ = [
     "NotifyResult",
     "TransferNotifyCallback",
+    "build_invite_recipient_ready_html",
     "build_transfer_received_html",
     "notify_telegram_user",
+    "register_proactive_telegram_notify",
+    "schedule_invite_sender_recipient_ready_notify",
     "schedule_transfer_received_notify",
 ]
+
+
+def register_proactive_telegram_notify(
+    state: AureyServiceState,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Called from Telegram bot startup so sync provisioning can schedule DMs."""
+
+    global _proactive_notify_state, _proactive_notify_loop
+    _proactive_notify_state = state
+    _proactive_notify_loop = loop
 
 
 @dataclass(frozen=True)
@@ -69,6 +86,19 @@ async def notify_telegram_user(
         return NotifyResult(delivered=False, detail=str(exc))
 
 
+def build_invite_recipient_ready_html(
+    *,
+    recipient_display: str,
+    target_handle: str,
+) -> str:
+    who = html.escape(recipient_display, quote=False)
+    handle = html.escape((target_handle or "").strip().lstrip("@"), quote=False)
+    return (
+        f"<b>{who}</b> finished Aurey wallet setup for <b>@{handle}</b>.\n"
+        "You can send tokens again using that Telegram handle."
+    )
+
+
 def build_transfer_received_html(*, sender_handle: str, tx_hash: str | None) -> str:
     short = ""
     if tx_hash:
@@ -101,6 +131,44 @@ def _sender_display_handle(state: AureyServiceState, sender_tid: int) -> str:
         )
     finally:
         db.close()
+
+
+def schedule_invite_sender_recipient_ready_notify(
+    *,
+    sender_telegram_user_id: int,
+    recipient_display: str,
+    target_handle: str,
+) -> None:
+    state = _proactive_notify_state
+    loop = _proactive_notify_loop
+    if state is None or loop is None:
+        _log.debug("skip invite sender notify: Telegram proactive notify not registered")
+        return
+
+    token = resolve_telegram_bot_token(state)
+    html = build_invite_recipient_ready_html(
+        recipient_display=recipient_display,
+        target_handle=target_handle,
+    )
+
+    async def _run() -> None:
+        result = await notify_telegram_user(
+            bot_token=token,
+            telegram_user_id=sender_telegram_user_id,
+            html=html,
+        )
+        if not result.delivered:
+            _log.info(
+                "invite sender notify not delivered sender=%s handle=@%s detail=%s",
+                sender_telegram_user_id,
+                target_handle,
+                result.detail,
+            )
+
+    try:
+        asyncio.run_coroutine_threadsafe(_run(), loop)
+    except Exception:
+        _log.warning("schedule_invite_sender_recipient_ready_notify failed", exc_info=True)
 
 
 def schedule_transfer_received_notify(

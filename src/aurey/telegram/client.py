@@ -1603,6 +1603,9 @@ def build_telegram_application(
     )
 
     async def _register_bot_commands(application: Application) -> None:
+        from aurey.telegram.notifications import register_proactive_telegram_notify
+
+        register_proactive_telegram_notify(state, asyncio.get_running_loop())
         try:
             me = await application.bot.get_me()
             if me.username:

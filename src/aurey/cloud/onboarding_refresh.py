@@ -90,6 +90,20 @@ def _apply_poll_payload(row: HostedPlatformUserORM, payload: Mapping[str, Any]) 
         row.onboarding_state = "ready"
 
 
+def _notify_invite_senders_if_wallet_ready(
+    session: Session,
+    settings: AureySettings,
+    row: HostedPlatformUserORM,
+) -> None:
+    if not (row.wallet_address or "").strip():
+        return
+    from aurey.cloud.hosted_invite_sender_notify import (
+        maybe_notify_invite_senders_recipient_wallet_ready,
+    )
+
+    maybe_notify_invite_senders_recipient_wallet_ready(session, settings, row)
+
+
 def _is_fully_ready_row(row: HostedPlatformUserORM) -> bool:
     return (
         (row.onboarding_state or "").strip() == "ready"
@@ -136,6 +150,7 @@ def refresh_hosted_user_claim_state(
             row,
             reason="ready_short_circuit",
         )
+        _notify_invite_senders_if_wallet_ready(session, settings, row)
         return row
 
     state = (row.onboarding_state or "").strip()
@@ -147,6 +162,7 @@ def refresh_hosted_user_claim_state(
             row,
             reason="non_awaiting_state",
         )
+        _notify_invite_senders_if_wallet_ready(session, settings, row)
         return row
 
     if not settings.hosted_platform_enabled:
@@ -197,6 +213,7 @@ def refresh_hosted_user_claim_state(
                     row,
                     reason="connection_404",
                 )
+                _notify_invite_senders_if_wallet_ready(session, settings, row)
                 return row
         else:
             raise
@@ -210,6 +227,7 @@ def refresh_hosted_user_claim_state(
             row,
             reason="connection_404",
         )
+        _notify_invite_senders_if_wallet_ready(session, settings, row)
         return row
 
     _apply_poll_payload(row, payload)
@@ -222,6 +240,7 @@ def refresh_hosted_user_claim_state(
         row,
         reason="post_claim_poll",
     )
+    _notify_invite_senders_if_wallet_ready(session, settings, row)
     return row
 
 

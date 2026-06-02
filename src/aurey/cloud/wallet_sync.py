@@ -110,6 +110,12 @@ def maybe_backfill_hosted_wallet_columns_from_signing_keys(
             bool(eth_written),
             bool(sol_written),
         )
+        if eth_written is not None and settings is not None:
+            from aurey.cloud.hosted_invite_sender_notify import (
+                maybe_notify_invite_senders_recipient_wallet_ready,
+            )
+
+            maybe_notify_invite_senders_recipient_wallet_ready(session, settings, row)
     return eth_written, sol_written
 
 

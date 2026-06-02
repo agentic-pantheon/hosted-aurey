@@ -26,6 +26,8 @@ Hosted users with a persisted **`wallet_address`** can receive ERC-20/native tra
 
 After a successful peer **`tx_execute`**, Aurey may DM the recipient’s **`telegram_user_id`**—only if they have already started a chat with the bot (Telegram does not allow cold DMs).
 
+When a recipient you invited finishes wallet setup (EVM address on file), Aurey DMs the **sender** who created the send-to-invite link so they can retry sending by @handle.
+
 ## 2. Define a provisioning template (sketch)
 
 Author a **template** JSON (exact schema per Platform docs) that describes:
