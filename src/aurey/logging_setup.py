@@ -10,6 +10,15 @@ _LOGGERS_QUIET: tuple[tuple[str, int], ...] = (
     ("httpx", logging.WARNING),
     ("httpcore", logging.WARNING),
     ("h11", logging.WARNING),
+    ("urllib3", logging.WARNING),
+    ("requests", logging.WARNING),
+    ("http.client", logging.WARNING),
+    ("web3", logging.WARNING),
+    ("web3.providers", logging.WARNING),
+    ("web3.providers.HTTPProvider", logging.WARNING),
+    ("web3._utils", logging.WARNING),
+    ("web3._utils.http", logging.WARNING),
+    ("websockets", logging.WARNING),
     ("openai", logging.WARNING),
     ("openai._base_client", logging.WARNING),
     ("langchain", logging.WARNING),
@@ -17,8 +26,16 @@ _LOGGERS_QUIET: tuple[tuple[str, int], ...] = (
     ("langgraph", logging.WARNING),
     ("telegram", logging.INFO),
     ("telegram.ext", logging.INFO),
-    ("http.client", logging.WARNING),
 )
+
+
+def resolve_log_level(*, default: int = logging.INFO) -> int:
+    """``AUREY_LOG_LEVEL`` (DEBUG, INFO, …) or ``default``."""
+
+    raw = (os.environ.get("AUREY_LOG_LEVEL") or "").strip().upper()
+    if not raw:
+        return default
+    return getattr(logging, raw, default)
 
 
 def _stderr_console() -> Any:
@@ -90,5 +107,6 @@ def uvicorn_log_config_propagate_only() -> dict[str, Any]:
 
 __all__ = [
     "configure_aurey_console_logging",
+    "resolve_log_level",
     "uvicorn_log_config_propagate_only",
 ]

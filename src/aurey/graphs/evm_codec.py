@@ -41,6 +41,19 @@ def erc20_transfer_data(to: str, amount_wei: int) -> str:
     return "0xa9059cbb" + _pad_addr(to) + _pad_uint256(amount_wei)
 
 
+def decode_erc20_transfer_recipient(data: str | None) -> str | None:
+    """Return checksummed recipient from standard ``transfer(address,uint256)`` calldata."""
+
+    body = _strip_0x((data or "").strip())
+    if not body.startswith("a9059cbb") or len(body) < 8 + 64 + 64:
+        return None
+    addr_word = body[8 : 8 + 64]
+    try:
+        return to_checksum_evm_address("0x" + addr_word[-40:])
+    except ValueError:
+        return None
+
+
 def erc20_approve_data(spender: str, amount_wei: int) -> str:
     return "0x095ea7b3" + _pad_addr(spender) + _pad_uint256(amount_wei)
 

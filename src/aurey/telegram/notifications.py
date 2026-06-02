@@ -13,6 +13,10 @@ from langchain_core.callbacks import BaseCallbackHandler
 from sqlalchemy import select
 
 from aurey.cloud.hosted_access import format_telegram_handle
+from aurey.cloud.hosted_transfer_notify_lookup import (
+    lookup_peer_recipient_by_wallet,
+    recipient_evm_from_transfer_execute,
+)
 from aurey.cloud.models import HostedPlatformUserORM
 from aurey.cloud.peer_transfer_context import (
     clear_peer_transfer_recipient,
@@ -300,23 +304,55 @@ class TransferNotifyCallback(BaseCallbackHandler):
         else:
             tx_hash_out = None
 
-        peer = current_peer_transfer_recipient.get()
         sender_tid = current_hosted_telegram_user_id.get()
-        if peer is None or sender_tid is None:
+        if sender_tid is None:
+            _log.info("transfer notify skipped reason=sender_telegram_context_missing")
             return None
 
+        peer = current_peer_transfer_recipient.get()
+        notify_source = "resolve_context"
+        if peer is None:
+            inferred = recipient_evm_from_transfer_execute(
+                self._state,
+                self._last_tx_execute_inputs,
+            )
+            if inferred:
+                peer = lookup_peer_recipient_by_wallet(self._state, inferred)
+                notify_source = "wallet_db_lookup"
+            if peer is None:
+                _log.info(
+                    "transfer notify skipped reason=no_recipient "
+                    "hint=resolve_hosted_recipient_by_handle_not_called_or_address_not_in_db "
+                    "inferred_evm=%s tx_hash=%s",
+                    inferred,
+                    tx_hash_out,
+                )
+                return None
+
         if not (peer.evm_address or "").strip():
+            _log.info("transfer notify skipped reason=peer_missing_evm_address")
             return None
         if not _should_notify_peer_transfer_execute(
             self._state,
             inputs=self._last_tx_execute_inputs,
             peer_evm_address=peer.evm_address,
         ):
+            _log.info(
+                "transfer notify skipped reason=not_peer_transfer_execute kind=%s",
+                _tx_execute_envelope_kind(self._state, self._last_tx_execute_inputs),
+            )
             return None
 
         # One-shot after a peer transfer execute (skip erc20_approval and other txs).
         clear_peer_transfer_recipient()
 
+        _log.info(
+            "transfer notify scheduled recipient_tid=%s handle=%s source=%s tx_hash=%s",
+            peer.telegram_user_id,
+            peer.telegram_handle,
+            notify_source,
+            tx_hash_out,
+        )
         schedule_transfer_received_notify(
             self._state,
             loop=self._loop,

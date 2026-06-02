@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import logging
 
-from aurey.logging_setup import configure_aurey_console_logging
+from aurey.logging_setup import configure_aurey_console_logging, resolve_log_level
 
 _log = logging.getLogger("aurey.telegram.runner")
 
@@ -18,12 +18,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Aurey Telegram + Rich console logs")
     parser.add_argument(
         "--log-level",
-        default="debug",
-        help="Root / aurey log level (debug, info, warning, …)",
+        default=None,
+        help="Root log level (default: AUREY_LOG_LEVEL or info). Debug floods RPC logs.",
     )
     args = parser.parse_args()
 
-    level = getattr(logging, args.log_level.upper(), logging.DEBUG)
+    if args.log_level:
+        level = getattr(logging, args.log_level.upper(), logging.INFO)
+    else:
+        level = resolve_log_level(default=logging.INFO)
     configure_aurey_console_logging(level=level)
 
     from telegram.error import Conflict
