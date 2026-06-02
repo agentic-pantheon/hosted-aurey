@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+from langchain_core.messages import ToolMessage
+
 from aurey.cloud.peer_transfer_context import PeerTransferRecipient
 from aurey.runtime import AureyRuntime, PreparedTransactionStore
 from aurey.telegram.notifications import _coerce_tool_output, _peer_from_resolve_tool_output
@@ -25,6 +27,22 @@ def test_coerce_tool_output_json_string() -> None:
     payload = {"ok": True, "result": {"tx_hash": "0xabc"}}
     out = _coerce_tool_output(json.dumps(payload))
     assert out == payload
+
+
+def test_coerce_tool_output_tool_message_json_content() -> None:
+    payload = {"ok": True, "result": {"tx_hash": "0xabc"}}
+    msg = ToolMessage(content=json.dumps(payload), tool_call_id="call-1")
+    assert _coerce_tool_output(msg) == payload
+
+
+def test_coerce_tool_output_tool_message_artifact() -> None:
+    payload = {"ok": True, "result": {"tx_hash": "0xdef"}}
+    msg = ToolMessage(
+        content="ignored",
+        tool_call_id="call-2",
+        artifact=payload,
+    )
+    assert _coerce_tool_output(msg) == payload
 
 
 def test_peer_from_resolve_tool_output() -> None:

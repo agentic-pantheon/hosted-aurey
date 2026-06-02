@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import html
 import json
@@ -38,20 +39,57 @@ _proactive_notify_loop: asyncio.AbstractEventLoop | None = None
 _PEER_TRANSFER_EXECUTE_KINDS = frozenset({"native_transfer", "erc20_transfer"})
 
 
+def _parse_tool_output_text(text: str) -> dict[str, Any] | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        try:
+            parsed = ast.literal_eval(stripped)
+        except (SyntaxError, ValueError):
+            return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _tool_message_content_text(content: Any) -> str | None:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        return json.dumps(content)
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text")
+                if isinstance(t, str):
+                    parts.append(t)
+        joined = "".join(parts).strip()
+        return joined or None
+    return None
+
+
 def _coerce_tool_output(output: Any) -> dict[str, Any] | None:
-    """LangChain may pass a dict or a JSON string from tool nodes."""
+    """LangChain may pass a dict, JSON string, or ``ToolMessage`` from tool nodes."""
 
     if isinstance(output, dict):
         return output
     if isinstance(output, str):
-        text = output.strip()
-        if not text:
-            return None
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return None
-        return parsed if isinstance(parsed, dict) else None
+        return _parse_tool_output_text(output)
+
+    artifact = getattr(output, "artifact", None)
+    if isinstance(artifact, dict):
+        return artifact
+
+    content = getattr(output, "content", None)
+    if content is not None:
+        text = _tool_message_content_text(content)
+        if text is not None:
+            return _parse_tool_output_text(text)
+
     return None
 
 
