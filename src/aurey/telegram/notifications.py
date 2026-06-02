@@ -19,6 +19,7 @@ from aurey.cloud.peer_transfer_context import (
     current_peer_transfer_recipient,
 )
 from aurey.cloud.signing_context import current_hosted_telegram_user_id
+from aurey.graphs.evm_codec import normalize_evm_address
 from aurey.service.state import AureyServiceState
 from aurey.telegram.client import resolve_telegram_bot_token
 
@@ -26,6 +27,52 @@ _log = logging.getLogger(__name__)
 
 _proactive_notify_state: AureyServiceState | None = None
 _proactive_notify_loop: asyncio.AbstractEventLoop | None = None
+
+_PEER_TRANSFER_EXECUTE_KINDS = frozenset({"native_transfer", "erc20_transfer"})
+
+
+def _tx_execute_envelope_kind(
+    state: AureyServiceState,
+    inputs: dict[str, Any],
+) -> str | None:
+    prepared_id = inputs.get("prepared_id")
+    if prepared_id:
+        record = state.runtime.prepared_txs.get(str(prepared_id))
+        if record is not None and record.kind == "execute_envelope":
+            raw = record.payload.get("kind")
+            return str(raw).strip() if raw is not None else None
+    envelope = inputs.get("envelope")
+    if isinstance(envelope, dict):
+        raw = envelope.get("kind")
+        return str(raw).strip() if raw is not None else None
+    return None
+
+
+def _should_notify_peer_transfer_execute(
+    state: AureyServiceState,
+    *,
+    inputs: dict[str, Any],
+    peer_evm_address: str,
+) -> bool:
+    kind = _tx_execute_envelope_kind(state, inputs)
+    if kind not in _PEER_TRANSFER_EXECUTE_KINDS:
+        return False
+    if kind == "native_transfer":
+        to_raw = None
+        if inputs.get("prepared_id"):
+            record = state.runtime.prepared_txs.get(str(inputs["prepared_id"]))
+            if record is not None:
+                to_raw = record.payload.get("to")
+        envelope = inputs.get("envelope")
+        if to_raw is None and isinstance(envelope, dict):
+            to_raw = envelope.get("to")
+        if to_raw:
+            try:
+                return normalize_evm_address(str(to_raw)) == normalize_evm_address(peer_evm_address)
+            except ValueError:
+                return False
+    return True
+
 
 __all__ = [
     "NotifyResult",
@@ -216,6 +263,7 @@ class TransferNotifyCallback(BaseCallbackHandler):
         self._state = state
         self._loop = loop
         self._last_tool_name: str | None = None
+        self._last_tx_execute_inputs: dict[str, Any] = {}
 
     def on_tool_start(
         self,
@@ -226,6 +274,9 @@ class TransferNotifyCallback(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         self._last_tool_name = serialized.get("name") if isinstance(serialized, dict) else None
+        if self._last_tool_name == "tx_execute":
+            raw = kwargs.get("inputs")
+            self._last_tx_execute_inputs = dict(raw) if isinstance(raw, dict) else {}
         return None
 
     def on_tool_end(
@@ -254,8 +305,16 @@ class TransferNotifyCallback(BaseCallbackHandler):
         if peer is None or sender_tid is None:
             return None
 
-        # One-shot: a resolved recipient is notified at most once per turn so a
-        # later unrelated tx_execute (e.g. a swap) does not re-DM the same person.
+        if not (peer.evm_address or "").strip():
+            return None
+        if not _should_notify_peer_transfer_execute(
+            self._state,
+            inputs=self._last_tx_execute_inputs,
+            peer_evm_address=peer.evm_address,
+        ):
+            return None
+
+        # One-shot after a peer transfer execute (skip erc20_approval and other txs).
         clear_peer_transfer_recipient()
 
         schedule_transfer_received_notify(

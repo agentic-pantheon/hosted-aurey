@@ -20,6 +20,7 @@ __all__ = [
 class PeerTransferRecipient:
     telegram_user_id: int
     telegram_handle: str
+    evm_address: str
 
 
 current_peer_transfer_recipient: ContextVar[PeerTransferRecipient | None] = ContextVar(

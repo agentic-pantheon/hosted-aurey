@@ -163,6 +163,7 @@ def _success_payload(
         PeerTransferRecipient(
             telegram_user_id=int(row.telegram_user_id),
             telegram_handle=display,
+            evm_address=eth,
         ),
     )
     result: dict[str, Any] = {
