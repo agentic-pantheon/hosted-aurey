@@ -19,6 +19,10 @@ from aurey.cloud.hosted_transfer_notify_lookup import (
     lookup_peer_recipient_by_wallet,
     recipient_evm_from_transfer_execute,
 )
+from aurey.cloud.transfer_notify_display import (
+    TransferReceivedDisplay,
+    transfer_received_display_from_execute,
+)
 from aurey.cloud.models import HostedPlatformUserORM
 from aurey.cloud.peer_transfer_context import (
     PeerTransferRecipient,
@@ -231,17 +235,36 @@ def build_invite_recipient_ready_html(
     )
 
 
-def build_transfer_received_html(*, sender_handle: str, tx_hash: str | None) -> str:
-    short = ""
-    if tx_hash:
-        h = tx_hash.strip()
-        if len(h) > 14:
-            short = f"{h[:8]}…{h[-6:]}"
-        else:
-            short = h
+def _short_tx_hash(tx_hash: str) -> str:
+    h = tx_hash.strip()
+    if len(h) > 14:
+        return f"{h[:8]}…{h[-6:]}"
+    return h
+
+
+def build_transfer_received_html(
+    *,
+    sender_handle: str,
+    display: TransferReceivedDisplay,
+) -> str:
     who = html.escape(sender_handle, quote=False)
-    tx_line = f" Tx: <code>{html.escape(short, quote=False)}</code>." if short else "."
-    return f"<b>{who}</b> sent you a transfer on Aurey.{tx_line}"
+    token = html.escape(display.token_label, quote=False)
+    amount = html.escape(display.amount_text, quote=False)
+    chain = html.escape(display.chain_label, quote=False)
+    lines = [
+        f"<b>{who}</b> sent you a transfer on Aurey.",
+        f"Token: <b>{token}</b>",
+        f"Amount: <b>{amount}</b>",
+        f"Chain: <b>{chain}</b>",
+    ]
+    if display.tx_hash:
+        short = html.escape(_short_tx_hash(display.tx_hash), quote=False)
+        if display.explorer_tx_url:
+            url = html.escape(display.explorer_tx_url, quote=True)
+            lines.append(f'Tx: <a href="{url}">{short}</a>')
+        else:
+            lines.append(f"Tx: <code>{short}</code>")
+    return "\n".join(lines)
 
 
 def _sender_display_handle(state: AureyServiceState, sender_tid: int) -> str:
@@ -310,11 +333,11 @@ def schedule_transfer_received_notify(
     sender_telegram_user_id: int,
     recipient_telegram_user_id: int,
     recipient_handle: str,
-    tx_hash: str | None,
+    display: TransferReceivedDisplay,
 ) -> None:
     token = resolve_telegram_bot_token(state)
     sender_handle = _sender_display_handle(state, sender_telegram_user_id)
-    html = build_transfer_received_html(sender_handle=sender_handle, tx_hash=tx_hash)
+    html = build_transfer_received_html(sender_handle=sender_handle, display=display)
 
     async def _run() -> None:
         result = await notify_telegram_user(
@@ -457,12 +480,24 @@ class TransferNotifyCallback(BaseCallbackHandler):
             notify_source,
             tx_hash_out,
         )
+        display = transfer_received_display_from_execute(
+            self._state,
+            tx_inputs,
+            tx_hash=tx_hash_out,
+        )
+        if display is None:
+            _log.info(
+                "transfer notify skipped reason=display_fields_unavailable tx_hash=%s",
+                tx_hash_out,
+            )
+            return None
+
         schedule_transfer_received_notify(
             self._state,
             loop=self._loop,
             sender_telegram_user_id=int(sender_tid),
             recipient_telegram_user_id=peer.telegram_user_id,
             recipient_handle=peer.telegram_handle,
-            tx_hash=tx_hash_out,
+            display=display,
         )
         return None

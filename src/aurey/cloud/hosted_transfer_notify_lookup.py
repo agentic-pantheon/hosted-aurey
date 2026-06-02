@@ -84,7 +84,17 @@ def lookup_peer_recipient_by_wallet(
         db.close()
 
 
+def execute_payload_from_tx_inputs(
+    state: AureyServiceState,
+    inputs: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolved execute envelope from ``tx_execute`` tool inputs."""
+
+    return _execute_payload(state, inputs)
+
+
 __all__ = [
+    "execute_payload_from_tx_inputs",
     "lookup_peer_recipient_by_wallet",
     "recipient_evm_from_transfer_execute",
 ]

@@ -54,6 +54,19 @@ def decode_erc20_transfer_recipient(data: str | None) -> str | None:
         return None
 
 
+def decode_erc20_transfer_amount_wei(data: str | None) -> int | None:
+    """Return raw transfer amount from standard ``transfer(address,uint256)`` calldata."""
+
+    body = _strip_0x((data or "").strip())
+    if not body.startswith("a9059cbb") or len(body) < 8 + 64 + 64:
+        return None
+    amount_word = body[8 + 64 : 8 + 64 + 64]
+    try:
+        return int(amount_word, 16)
+    except ValueError:
+        return None
+
+
 def erc20_approve_data(spender: str, amount_wei: int) -> str:
     return "0x095ea7b3" + _pad_addr(spender) + _pad_uint256(amount_wei)
 

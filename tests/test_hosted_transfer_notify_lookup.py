@@ -10,7 +10,11 @@ from aurey.cloud.hosted_transfer_notify_lookup import (
     recipient_evm_from_transfer_execute,
 )
 from aurey.cloud.models import Base, HostedPlatformUserORM
-from aurey.graphs.evm_codec import decode_erc20_transfer_recipient, erc20_transfer_data
+from aurey.graphs.evm_codec import (
+    decode_erc20_transfer_amount_wei,
+    decode_erc20_transfer_recipient,
+    erc20_transfer_data,
+)
 from aurey.runtime import AureyRuntime
 from aurey.service.state import AureyServiceState
 from aurey.settings import AureySettings
@@ -22,6 +26,7 @@ def test_decode_erc20_transfer_recipient() -> None:
     decoded = decode_erc20_transfer_recipient(data)
     assert decoded is not None
     assert decoded.lower() == to_addr.lower()
+    assert decode_erc20_transfer_amount_wei(data) == 500_000
 
 
 def test_recipient_evm_from_prepared_erc20_transfer() -> None:
