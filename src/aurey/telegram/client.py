@@ -998,7 +998,9 @@ def handle_telegram_text(
 ) -> str:
     """Handle one inbound Telegram text message and return safe text for ``reply_text``."""
 
-    session_id = f"telegram:{chat_id}"
+    from aurey.reasoning.conversation_thread import telegram_daily_thread_id
+
+    session_id = telegram_daily_thread_id(chat_id)
     context: dict[str, Any] = {"telegram_chat_id": str(chat_id)}
     if user_id is not None:
         context["telegram_user_id"] = str(user_id)

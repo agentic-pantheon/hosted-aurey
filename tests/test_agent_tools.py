@@ -531,6 +531,13 @@ def test_tx_execute_tool_oneclaw_intents_requires_runtime_signer():
     assert out["error"]["code"] == "secret_not_configured"
 
 
+def test_aurey_summarization_middleware_uses_message_thresholds():
+    mw = deep_agent_mod._create_aurey_summarization_middleware(_DummyChat(), object())
+    inner = mw._lc_helper
+    assert inner.trigger == ("messages", deep_agent_mod._SUMMARIZE_TRIGGER_MESSAGES)
+    assert inner.keep == ("messages", deep_agent_mod._SUMMARIZE_KEEP_MESSAGES)
+
+
 def test_create_aurey_deep_agent_compiles():
     signing_path = "vault/signing/local"
     secrets = {signing_path: "0x" + "ff" * 32}

@@ -21,10 +21,36 @@ from aurey.tools.agent_tools import build_aurey_subgraph_tools
 
 _log = logging.getLogger(__name__)
 
+# Tool-heavy turns inflate message count; summarize before checkpoints grow unbounded.
+_SUMMARIZE_TRIGGER_MESSAGES = 60
+_SUMMARIZE_KEEP_MESSAGES = 25
+
 try:
     from deepagents import create_deep_agent as _create_deep_agent_impl
+    from deepagents import graph as _deepagents_graph
+    from deepagents.middleware.summarization import (
+        SummarizationMiddleware as _DeepSummarizationMiddleware,
+    )
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     _create_deep_agent_impl = None
+    _deepagents_graph = None  # type: ignore[assignment]
+    _DeepSummarizationMiddleware = None  # type: ignore[assignment,misc]
+
+
+def _create_aurey_summarization_middleware(model: BaseChatModel, backend: Any) -> Any:
+    """Message-count triggers for tool-heavy Telegram turns (replaces model-token defaults)."""
+
+    assert _DeepSummarizationMiddleware is not None
+    return _DeepSummarizationMiddleware(
+        model=model,
+        backend=backend,
+        trigger=("messages", _SUMMARIZE_TRIGGER_MESSAGES),
+        keep=("messages", _SUMMARIZE_KEEP_MESSAGES),
+    )
+
+
+if _deepagents_graph is not None:
+    _deepagents_graph.create_summarization_middleware = _create_aurey_summarization_middleware
 
 
 AUREY_DEEP_USER_PROMPT = (
