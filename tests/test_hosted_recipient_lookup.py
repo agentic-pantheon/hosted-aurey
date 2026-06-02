@@ -104,6 +104,49 @@ def test_lookup_recipient_not_found_invite_via_invoke_context() -> None:
         engine.dispose()
 
 
+def test_lookup_recipient_wallet_unavailable_with_invite() -> None:
+    factory, engine = _memory_factory()
+    try:
+        session = factory()
+        session.add(
+            HostedPlatformUserORM(
+                telegram_user_id=20,
+                telegram_username="kevinjonescreates",
+                wallet_address=None,
+            ),
+        )
+        session.commit()
+        session.close()
+
+        settings = AureySettings(
+            hosted_platform_enabled=True,
+            platform_api_key="plt_x",
+            telegram_bot_username="aureybot",
+        )
+        runtime = AureyRuntime(
+            settings=settings,
+            secret_store=object(),  # type: ignore[arg-type]
+            evm_rpc_factory=lambda _c: object(),  # type: ignore[arg-type, return-value]
+            http=object(),  # type: ignore[arg-type]
+            tx_pipeline=object(),  # type: ignore[arg-type]
+            hosted_session_factory=factory,
+        )
+        with hosted_telegram_user_id_scope(99):
+            out = lookup_hosted_recipient_by_telegram_handle(
+                runtime,
+                telegram_handle="@kevinjonescreates",
+            )
+        assert out["ok"] is False
+        assert out["error"]["code"] == "recipient_wallet_unavailable"
+        assert "invite_deeplink" in out
+        assert "t.me/aureybot" in out["invite_deeplink"]
+        assert "inv_" in out["invite_deeplink"] or out["invite_deeplink"].rstrip("/").endswith(
+            "aureybot"
+        )
+    finally:
+        engine.dispose()
+
+
 def test_lookup_recipient_ambiguous() -> None:
     factory, engine = _memory_factory()
     try:

@@ -1621,8 +1621,9 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         """Resolve another Aurey user's EVM ``to_address`` from their Telegram @handle (case-insensitive).
 
         Call before ``tx_prepare_erc20_transfer`` or ``tx_prepare_native_transfer``. On
-        ``recipient_not_found``, paste the full ``invite_deeplink`` URL from the tool result
-        (top-level or ``error.invite_deeplink``) in your reply—do not claim funds are held.
+        ``recipient_not_found`` or ``recipient_wallet_unavailable``, paste only the exact
+        ``invite_deeplink`` from the tool (top-level or ``error.invite_deeplink``); never invent links.
+        Do not claim funds are held.
         When ``resolved_via_handle_claim`` is true, include ``telegram_user_id`` and
         ``recipient_binding_note`` in the confirmation. Not for ENS names (use ``evm_resolve_ens`` on ethereum).
         """

@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from aurey.cloud.hosted_send_invite import (
+    build_bot_onboarding_deeplink,
     build_invite_deeplink,
     build_start_invite_welcome_if_any,
     consume_send_invite,
@@ -28,6 +29,11 @@ def test_build_invite_deeplink() -> None:
     settings = AureySettings(telegram_bot_username="MyBot")
     link = build_invite_deeplink(settings, "abc123")
     assert link == "https://t.me/MyBot?start=inv_abc123"
+
+
+def test_build_bot_onboarding_deeplink() -> None:
+    settings = AureySettings(telegram_bot_username="aureybot")
+    assert build_bot_onboarding_deeplink(settings) == "https://t.me/aureybot"
 
 
 def test_create_and_load_invite() -> None:

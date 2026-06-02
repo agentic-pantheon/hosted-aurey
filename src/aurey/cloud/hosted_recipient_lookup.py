@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 from aurey.cloud.hosted_access import format_telegram_handle, normalize_telegram_username
 from aurey.cloud.hosted_handle_claim import get_handle_claim_telegram_user_id
 from aurey.cloud.hosted_send_invite import (
-    attach_invite_to_not_found_error,
+    attach_invite_to_error,
+    build_bot_onboarding_deeplink,
     try_create_invite_for_not_found,
 )
 from aurey.cloud.models import HostedPlatformUserORM
@@ -22,8 +23,19 @@ from aurey.cloud.signing_context import (
 )
 from aurey.graphs.evm_codec import to_checksum_evm_address
 from aurey.runtime import AureyRuntime
+from aurey.settings import AureySettings
 
 __all__ = ["lookup_hosted_recipient_by_telegram_handle"]
+
+_INVITE_HINT_NOT_FOUND = (
+    "Share this link with the recipient so they can start Aurey and receive payments."
+)
+_INVITE_HINT_WALLET_UNAVAILABLE = (
+    "Share this link so they can open Aurey and finish wallet setup (no funds sent yet)."
+)
+_INVITE_HINT_BOT_ONLY = (
+    "Share this bot link so they can open Aurey and finish setup (no handle-specific invite)."
+)
 
 
 def _invite_sender_telegram_user_id() -> int | None:
@@ -44,7 +56,36 @@ def _invite_sender_telegram_user_id() -> int | None:
     return None
 
 
-def _not_found_payload(err: dict[str, Any]) -> dict[str, Any]:
+def _attach_sender_invite(
+    session: Session,
+    settings: AureySettings,
+    err: dict[str, Any],
+    *,
+    target_handle_normalized: str,
+    hint: str,
+    allow_bot_only_fallback: bool,
+) -> None:
+    sender_tid = _invite_sender_telegram_user_id()
+    invite_extra = try_create_invite_for_not_found(
+        session,
+        settings,
+        sender_telegram_user_id=sender_tid,
+        target_handle_normalized=target_handle_normalized,
+    )
+    attach_invite_to_error(err, invite_extra, hint=hint)
+    if not err.get("invite_deeplink") and allow_bot_only_fallback:
+        fallback = build_bot_onboarding_deeplink(settings)
+        if fallback:
+            err["invite_deeplink"] = fallback
+            err["invite_hint"] = _INVITE_HINT_BOT_ONLY
+    if not err.get("invite_deeplink"):
+        if sender_tid is None:
+            err["invite_unavailable_reason"] = "sender_telegram_context_missing"
+        else:
+            err["invite_unavailable_reason"] = "telegram_bot_username_not_configured"
+
+
+def _error_payload_with_invite(err: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {"ok": False, "error": err}
     link = err.get("invite_deeplink")
     if isinstance(link, str) and link.strip():
@@ -198,21 +239,16 @@ def lookup_hosted_recipient_by_telegram_handle(
                     "They must start the bot first; share an invite link if offered."
                 ),
             }
-            sender_tid = _invite_sender_telegram_user_id()
-            invite_extra = try_create_invite_for_not_found(
+            _attach_sender_invite(
                 db,
                 runtime.settings,
-                sender_telegram_user_id=sender_tid,
+                err,
                 target_handle_normalized=normalized,
+                hint=_INVITE_HINT_NOT_FOUND,
+                allow_bot_only_fallback=True,
             )
             db.commit()
-            attach_invite_to_not_found_error(err, invite_extra)
-            if not invite_extra.invite_deeplink:
-                if sender_tid is None:
-                    err["invite_unavailable_reason"] = "sender_telegram_context_missing"
-                else:
-                    err["invite_unavailable_reason"] = "telegram_bot_username_not_configured"
-            return _not_found_payload(err)
+            return _error_payload_with_invite(err)
 
         wa_raw = (row.wallet_address or "").strip()
         display = format_telegram_handle(
@@ -220,15 +256,22 @@ def lookup_hosted_recipient_by_telegram_handle(
             telegram_user_id=row.telegram_user_id,
         )
         if not wa_raw:
-            return {
-                "ok": False,
-                "error": {
-                    "code": "recipient_wallet_unavailable",
-                    "message": (
-                        f"Aurey user {display} does not have an EVM wallet address on file yet."
-                    ),
-                },
+            err_wallet: dict[str, Any] = {
+                "code": "recipient_wallet_unavailable",
+                "message": (
+                    f"Aurey user {display} does not have an EVM wallet address on file yet."
+                ),
             }
+            _attach_sender_invite(
+                db,
+                runtime.settings,
+                err_wallet,
+                target_handle_normalized=normalized,
+                hint=_INVITE_HINT_WALLET_UNAVAILABLE,
+                allow_bot_only_fallback=True,
+            )
+            db.commit()
+            return _error_payload_with_invite(err_wallet)
         try:
             eth = to_checksum_evm_address(wa_raw)
         except ValueError:

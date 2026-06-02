@@ -22,7 +22,9 @@ from aurey.settings import AureySettings
 
 __all__ = [
     "InviteExtras",
+    "attach_invite_to_error",
     "attach_invite_to_not_found_error",
+    "build_bot_onboarding_deeplink",
     "build_invite_deeplink",
     "set_invite_bot_username_cache",
     "consume_send_invite",
@@ -65,6 +67,15 @@ def build_invite_deeplink(settings: AureySettings, token: str) -> str | None:
         return None
     payload = f"{_INVITE_PREFIX}{token}"
     return f"https://t.me/{bot}?start={payload}"
+
+
+def build_bot_onboarding_deeplink(settings: AureySettings) -> str | None:
+    """Generic ``t.me/<bot>`` link when a handle-specific ``inv_`` token is unavailable."""
+
+    bot = _resolved_bot_username(settings)
+    if not bot:
+        return None
+    return f"https://t.me/{bot}"
 
 
 def try_create_invite_for_not_found(
@@ -112,15 +123,28 @@ def try_create_invite_for_not_found(
     return InviteExtras(invite_deeplink=link, invite_token=token if link else None)
 
 
+def attach_invite_to_error(
+    err: dict[str, Any],
+    extras: InviteExtras,
+    *,
+    hint: str,
+) -> None:
+    if extras.invite_deeplink:
+        err["invite_deeplink"] = extras.invite_deeplink
+        err["invite_hint"] = hint
+
+
 def attach_invite_to_not_found_error(
     err: dict[str, Any],
     extras: InviteExtras,
 ) -> None:
-    if extras.invite_deeplink:
-        err["invite_deeplink"] = extras.invite_deeplink
-        err["invite_hint"] = (
+    attach_invite_to_error(
+        err,
+        extras,
+        hint=(
             "Share this link with the recipient so they can start Aurey and receive payments."
-        )
+        ),
+    )
 
 
 def load_invite_by_start_payload(
