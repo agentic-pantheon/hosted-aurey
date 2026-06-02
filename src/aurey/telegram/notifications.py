@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -19,8 +20,10 @@ from aurey.cloud.hosted_transfer_notify_lookup import (
 )
 from aurey.cloud.models import HostedPlatformUserORM
 from aurey.cloud.peer_transfer_context import (
+    PeerTransferRecipient,
     clear_peer_transfer_recipient,
     current_peer_transfer_recipient,
+    set_peer_transfer_recipient,
 )
 from aurey.cloud.signing_context import current_hosted_telegram_user_id
 from aurey.graphs.evm_codec import normalize_evm_address
@@ -33,6 +36,46 @@ _proactive_notify_state: AureyServiceState | None = None
 _proactive_notify_loop: asyncio.AbstractEventLoop | None = None
 
 _PEER_TRANSFER_EXECUTE_KINDS = frozenset({"native_transfer", "erc20_transfer"})
+
+
+def _coerce_tool_output(output: Any) -> dict[str, Any] | None:
+    """LangChain may pass a dict or a JSON string from tool nodes."""
+
+    if isinstance(output, dict):
+        return output
+    if isinstance(output, str):
+        text = output.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _peer_from_resolve_tool_output(out: dict[str, Any]) -> PeerTransferRecipient | None:
+    if not out.get("ok"):
+        return None
+    res = out.get("result")
+    if not isinstance(res, dict):
+        return None
+    tid = res.get("telegram_user_id")
+    eth = res.get("ethereum") or res.get("to_address")
+    if tid is None or not eth:
+        return None
+    try:
+        tid_i = int(tid)
+        eth_s = normalize_evm_address(str(eth).strip())
+    except (TypeError, ValueError):
+        return None
+    handle = str(res.get("telegram_handle") or f"user:{tid_i}")
+    return PeerTransferRecipient(
+        telegram_user_id=tid_i,
+        telegram_handle=handle,
+        evm_address=eth_s,
+    )
 
 
 def _tx_execute_envelope_kind(
@@ -263,11 +306,14 @@ class TransferNotifyCallback(BaseCallbackHandler):
         *,
         state: AureyServiceState,
         loop: asyncio.AbstractEventLoop,
+        sender_telegram_user_id: int | None = None,
     ) -> None:
         self._state = state
         self._loop = loop
-        self._last_tool_name: str | None = None
-        self._last_tx_execute_inputs: dict[str, Any] = {}
+        self._sender_telegram_user_id = sender_telegram_user_id
+        self._tool_name_by_run: dict[str, str] = {}
+        self._tx_execute_inputs_by_run: dict[str, dict[str, Any]] = {}
+        self._pending_peer: PeerTransferRecipient | None = None
 
     def on_tool_start(
         self,
@@ -277,10 +323,14 @@ class TransferNotifyCallback(BaseCallbackHandler):
         run_id: UUID,
         **kwargs: Any,
     ) -> Any:
-        self._last_tool_name = serialized.get("name") if isinstance(serialized, dict) else None
-        if self._last_tool_name == "tx_execute":
+        name = serialized.get("name") if isinstance(serialized, dict) else None
+        tool = (name or "").strip()
+        self._tool_name_by_run[str(run_id)] = tool
+        if tool == "tx_execute":
             raw = kwargs.get("inputs")
-            self._last_tx_execute_inputs = dict(raw) if isinstance(raw, dict) else {}
+            self._tx_execute_inputs_by_run[str(run_id)] = (
+                dict(raw) if isinstance(raw, dict) else {}
+            )
         return None
 
     def on_tool_end(
@@ -290,13 +340,33 @@ class TransferNotifyCallback(BaseCallbackHandler):
         run_id: UUID,
         **kwargs: Any,
     ) -> Any:
-        name = self._last_tool_name or ""
-        if name != "tx_execute":
+        tool = self._tool_name_by_run.pop(str(run_id), "")
+        out = _coerce_tool_output(output)
+
+        if tool == "resolve_hosted_recipient_by_handle" and out is not None:
+            peer = _peer_from_resolve_tool_output(out)
+            if peer is not None:
+                self._pending_peer = peer
+                set_peer_transfer_recipient(peer)
             return None
-        if not isinstance(output, dict) or not output.get("ok"):
+
+        if tool != "tx_execute":
             return None
-        result = output.get("result")
+
+        tx_inputs = self._tx_execute_inputs_by_run.pop(str(run_id), {})
+
+        if out is None:
+            _log.info(
+                "transfer notify skipped reason=tool_output_unparsed type=%s",
+                type(output).__name__,
+            )
+            return None
+        if not out.get("ok"):
+            _log.info("transfer notify skipped reason=tx_execute_not_ok")
+            return None
+        result = out.get("result")
         if not isinstance(result, dict):
+            _log.info("transfer notify skipped reason=tx_execute_result_not_dict")
             return None
         tx_hash = result.get("tx_hash")
         if isinstance(tx_hash, str):
@@ -304,25 +374,21 @@ class TransferNotifyCallback(BaseCallbackHandler):
         else:
             tx_hash_out = None
 
-        sender_tid = current_hosted_telegram_user_id.get()
+        sender_tid = self._sender_telegram_user_id or current_hosted_telegram_user_id.get()
         if sender_tid is None:
             _log.info("transfer notify skipped reason=sender_telegram_context_missing")
             return None
 
-        peer = current_peer_transfer_recipient.get()
+        peer = current_peer_transfer_recipient.get() or self._pending_peer
         notify_source = "resolve_context"
         if peer is None:
-            inferred = recipient_evm_from_transfer_execute(
-                self._state,
-                self._last_tx_execute_inputs,
-            )
+            inferred = recipient_evm_from_transfer_execute(self._state, tx_inputs)
             if inferred:
                 peer = lookup_peer_recipient_by_wallet(self._state, inferred)
                 notify_source = "wallet_db_lookup"
             if peer is None:
                 _log.info(
                     "transfer notify skipped reason=no_recipient "
-                    "hint=resolve_hosted_recipient_by_handle_not_called_or_address_not_in_db "
                     "inferred_evm=%s tx_hash=%s",
                     inferred,
                     tx_hash_out,
@@ -334,16 +400,16 @@ class TransferNotifyCallback(BaseCallbackHandler):
             return None
         if not _should_notify_peer_transfer_execute(
             self._state,
-            inputs=self._last_tx_execute_inputs,
+            inputs=tx_inputs,
             peer_evm_address=peer.evm_address,
         ):
             _log.info(
                 "transfer notify skipped reason=not_peer_transfer_execute kind=%s",
-                _tx_execute_envelope_kind(self._state, self._last_tx_execute_inputs),
+                _tx_execute_envelope_kind(self._state, tx_inputs),
             )
             return None
 
-        # One-shot after a peer transfer execute (skip erc20_approval and other txs).
+        self._pending_peer = None
         clear_peer_transfer_recipient()
 
         _log.info(

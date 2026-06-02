@@ -1017,8 +1017,18 @@ def handle_telegram_text(
     if notify_event_loop is not None:
         from aurey.telegram.notifications import TransferNotifyCallback
 
+        sender_tid: int | None = None
+        if user_id is not None:
+            try:
+                sender_tid = int(user_id)
+            except (TypeError, ValueError):
+                sender_tid = None
         extras.append(
-            TransferNotifyCallback(state=state, loop=notify_event_loop),
+            TransferNotifyCallback(
+                state=state,
+                loop=notify_event_loop,
+                sender_telegram_user_id=sender_tid,
+            ),
         )
     result = invoke_deep_agent_turn(
         state,

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
+from aurey.cloud.peer_transfer_context import PeerTransferRecipient
 from aurey.runtime import AureyRuntime, PreparedTransactionStore
+from aurey.telegram.notifications import _coerce_tool_output, _peer_from_resolve_tool_output
 from aurey.settings import AureySettings
 from aurey.telegram.notifications import _should_notify_peer_transfer_execute
 
@@ -15,6 +19,29 @@ def _runtime() -> AureyRuntime:
         http=object(),  # type: ignore[arg-type]
         tx_pipeline=object(),  # type: ignore[arg-type]
     )
+
+
+def test_coerce_tool_output_json_string() -> None:
+    payload = {"ok": True, "result": {"tx_hash": "0xabc"}}
+    out = _coerce_tool_output(json.dumps(payload))
+    assert out == payload
+
+
+def test_peer_from_resolve_tool_output() -> None:
+    peer = _peer_from_resolve_tool_output(
+        {
+            "ok": True,
+            "result": {
+                "telegram_user_id": 99,
+                "telegram_handle": "@bob",
+                "ethereum": "0x00000000000000000000000000000000000000A1",
+                "to_address": "0x00000000000000000000000000000000000000A1",
+            },
+        },
+    )
+    assert peer is not None
+    assert peer.telegram_user_id == 99
+    assert isinstance(peer, PeerTransferRecipient)
 
 
 def test_skip_erc20_approval_execute() -> None:
