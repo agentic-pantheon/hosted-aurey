@@ -37,7 +37,7 @@ class HostedPlatformUserORM(Base):
         default=uuid.uuid4,
     )
     telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
-    telegram_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     connection_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     claim_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     onboarding_state: Mapped[str] = mapped_column(
@@ -94,6 +94,52 @@ class HostedEmailVerificationORM(Base):
     code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class HostedHandleClaimORM(Base):
+    """Maps a normalized @handle to the Telegram user who claimed it via invite."""
+
+    __tablename__ = "hosted_handle_claims"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    handle_normalized: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    source_invite_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("hosted_send_invites.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    claimed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class HostedSendInviteORM(Base):
+    """Deep-link invite when a sender tries to pay an unknown @handle."""
+
+    __tablename__ = "hosted_send_invites"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    sender_telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    target_handle_normalized: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -187,6 +233,8 @@ __all__ = [
     "Base",
     "HostedAccessRequestORM",
     "HostedEmailVerificationORM",
+    "HostedHandleClaimORM",
     "HostedPlatformUserORM",
+    "HostedSendInviteORM",
     "TokenRegistryORM",
 ]

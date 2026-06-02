@@ -11,8 +11,10 @@ from openai import APIConnectionError, APITimeoutError
 from pydantic import BaseModel
 
 from aurey.cloud.hosted_wallet_addresses import lookup_hosted_wallet_addresses
+from aurey.cloud.peer_transfer_context import peer_transfer_recipient_scope
 from aurey.cloud.signing_context import (
     HostedSigningContext,
+    aurey_invoke_context_scope,
     hosted_signing_context_scope,
     hosted_telegram_user_id_scope,
 )
@@ -370,22 +372,23 @@ def invoke_deep_agent_turn(
 
     try:
         def _run_graph_invoke() -> Any:
-            if hosted_signing_context is not None:
-                with hosted_signing_context_scope(hosted_signing_context):
-                    with hosted_telegram_user_id_scope(telegram_user_id):
-                        return _invoke_graph_with_transient_retries(
-                            graph,
-                            message=message,
-                            config=config,
-                            hosted_wallet_binding_prefix=hosted_wallet_binding_prefix,
-                        )
-            with hosted_telegram_user_id_scope(telegram_user_id):
-                return _invoke_graph_with_transient_retries(
-                    graph,
-                    message=message,
-                    config=config,
-                    hosted_wallet_binding_prefix=hosted_wallet_binding_prefix,
-                )
+            with peer_transfer_recipient_scope(), aurey_invoke_context_scope(merged_context):
+                if hosted_signing_context is not None:
+                    with hosted_signing_context_scope(hosted_signing_context):
+                        with hosted_telegram_user_id_scope(telegram_user_id):
+                            return _invoke_graph_with_transient_retries(
+                                graph,
+                                message=message,
+                                config=config,
+                                hosted_wallet_binding_prefix=hosted_wallet_binding_prefix,
+                            )
+                with hosted_telegram_user_id_scope(telegram_user_id):
+                    return _invoke_graph_with_transient_retries(
+                        graph,
+                        message=message,
+                        config=config,
+                        hosted_wallet_binding_prefix=hosted_wallet_binding_prefix,
+                    )
 
         result = _run_graph_invoke()
     except Exception as exc:

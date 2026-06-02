@@ -672,6 +672,15 @@ class EvmResolveEnsArgs(BaseModel):
     )
 
 
+class ResolveHostedRecipientArgs(BaseModel):
+    """Look up another hosted Aurey user's EVM wallet by Telegram @handle."""
+
+    telegram_handle: str = Field(
+        min_length=1,
+        description="Recipient Telegram username, with or without leading @.",
+    )
+
+
 class GetHostedWalletAddressesArgs(BaseModel):
     """Hosted Telegram user's provisioned chain addresses from Postgres / Platform signing-keys."""
 
@@ -1346,6 +1355,7 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         On success (`ok` true), broadcast with ``tx_execute(prepared_id=result['prepared_id'])`` (preferred)
         or ``tx_execute(envelope=...)`` using the returned summary plus ``prepared_id``. If ``to_address`` is an ENS name,
         call ``evm_resolve_ens`` first on ethereum and use ``resolved_address`` as ``to_address``.
+        For Aurey users, use ``resolve_hosted_recipient_by_handle`` and pass ``to_address`` from ``ethereum``.
         """
         payload = TxPrepareNative(
             chain=chain,
@@ -1370,7 +1380,8 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         `amount_wei` is misleadingly named: use the token's **native decimals** (raw integer),
         not ETH wei. USDC = 6 decimals. On success (`ok` true), call
         ``tx_execute(prepared_id=result['prepared_id'])`` (preferred). Resolve ENS recipients with
-        ``evm_resolve_ens`` (ethereum) before passing ``to_address``.
+        ``evm_resolve_ens`` (ethereum) before passing ``to_address``. For Aurey users, resolve
+        ``@handle`` with ``resolve_hosted_recipient_by_handle`` first.
         """
         payload = TxPrepareErc20Transfer(
             chain=chain,
@@ -1605,6 +1616,23 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
             ]
         )
 
+    @tool(args_schema=ResolveHostedRecipientArgs)
+    def resolve_hosted_recipient_by_handle(telegram_handle: str) -> dict[str, Any]:
+        """Resolve another Aurey user's EVM ``to_address`` from their Telegram @handle (case-insensitive).
+
+        Call before ``tx_prepare_erc20_transfer`` or ``tx_prepare_native_transfer``. On
+        ``recipient_not_found``, paste the full ``invite_deeplink`` URL from the tool result
+        (top-level or ``error.invite_deeplink``) in your reply—do not claim funds are held.
+        When ``resolved_via_handle_claim`` is true, include ``telegram_user_id`` and
+        ``recipient_binding_note`` in the confirmation. Not for ENS names (use ``evm_resolve_ens`` on ethereum).
+        """
+        from aurey.cloud.hosted_recipient_lookup import lookup_hosted_recipient_by_telegram_handle
+
+        return lookup_hosted_recipient_by_telegram_handle(
+            runtime,
+            telegram_handle=telegram_handle,
+        )
+
     @tool(args_schema=GetHostedWalletAddressesArgs)
     def get_hosted_wallet_addresses(
         chain: Literal["ethereum", "solana", "all"] = "all",
@@ -1620,6 +1648,7 @@ def build_aurey_subgraph_tools(runtime: AureyRuntime) -> list[BaseTool]:
         count = note_user_input_request(questions)
         return {"ok": True, "result": {"status": "needs_user_input", "question_count": count}}
 
+    tools.append(resolve_hosted_recipient_by_handle)
     tools.append(get_hosted_wallet_addresses)
     tools.append(request_user_input)
 

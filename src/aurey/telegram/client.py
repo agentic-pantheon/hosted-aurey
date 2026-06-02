@@ -994,6 +994,7 @@ def handle_telegram_text(
     user_id: int | str | None = None,
     model: str | None = None,
     progress_sink: Callable[[str], None] | None = None,
+    notify_event_loop: asyncio.AbstractEventLoop | None = None,
 ) -> str:
     """Handle one inbound Telegram text message and return safe text for ``reply_text``."""
 
@@ -1010,14 +1011,22 @@ def handle_telegram_text(
         from aurey.service.invoke import HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY
 
         context[HOSTED_WALLET_FROM_SERVER_CONTEXT_KEY] = True
-    extras = [TelegramInvokeProgressCallback(progress_sink)] if progress_sink is not None else None
+    extras: list[Any] = []
+    if progress_sink is not None:
+        extras.append(TelegramInvokeProgressCallback(progress_sink))
+    if notify_event_loop is not None:
+        from aurey.telegram.notifications import TransferNotifyCallback
+
+        extras.append(
+            TransferNotifyCallback(state=state, loop=notify_event_loop),
+        )
     result = invoke_deep_agent_turn(
         state,
         message=text,
         session_id=session_id,
         context=context,
         model=model,
-        extra_callbacks=extras,
+        extra_callbacks=extras or None,
         hosted_signing_context=signing_ctx,
     )
     if result.ok:
@@ -1100,6 +1109,43 @@ def build_telegram_application(
                 return
             telegram_user_id = int(tid_raw)
             telegram_username = getattr(tg_user, "username", None)
+
+            start_args = list(getattr(context, "args", None) or [])
+            if start_args:
+
+                def _invite_welcome_sync() -> str | None:
+                    from aurey.cloud.hosted_send_invite import build_start_invite_welcome_if_any
+
+                    factory = state.hosted_session_factory
+                    if factory is None:
+                        return None
+                    db = factory()
+                    try:
+                        out = build_start_invite_welcome_if_any(
+                            db,
+                            cfg,
+                            start_arg=start_args[0],
+                            invitee_username=telegram_username,
+                            invitee_telegram_user_id=telegram_user_id,
+                        )
+                        db.commit()
+                        return out
+                    except Exception:
+                        db.rollback()
+                        raise
+                    finally:
+                        db.close()
+
+                try:
+                    invite_html = await asyncio.to_thread(_invite_welcome_sync)
+                    if invite_html:
+                        await msg.reply_text(
+                            invite_html,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                        )
+                except Exception:
+                    gate_log.warning("start invite welcome failed", exc_info=True)
 
             def _provision_sync() -> tuple[str | None, str]:
                 factory = state.hosted_session_factory
@@ -1371,6 +1417,7 @@ def build_telegram_application(
                 parse_mode="HTML",
             )
 
+            notify_loop = asyncio.get_running_loop()
             invoke_task = asyncio.create_task(
                 asyncio.to_thread(
                     handle_telegram_text,
@@ -1380,6 +1427,7 @@ def build_telegram_application(
                     text=msg.text,
                     model=model,
                     progress_sink=progress_q.put_nowait,
+                    notify_event_loop=notify_loop,
                 )
             )
 
@@ -1555,6 +1603,15 @@ def build_telegram_application(
     )
 
     async def _register_bot_commands(application: Application) -> None:
+        try:
+            me = await application.bot.get_me()
+            if me.username:
+                from aurey.cloud.hosted_send_invite import set_invite_bot_username_cache
+
+                set_invite_bot_username_cache(me.username)
+                gate_log.info("Cached Telegram bot username for invite links: @%s", me.username)
+        except Exception:
+            gate_log.warning("Could not cache bot username for invite links", exc_info=True)
         try:
             await application.bot.set_my_commands(
                 _telegram_bot_command_menu(

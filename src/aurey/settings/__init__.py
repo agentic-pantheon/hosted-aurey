@@ -367,6 +367,21 @@ class AureySettings(BaseSettings):
         ),
         validation_alias=AliasChoices("AUREY_TELEGRAM_BOT_TOKEN"),
     )
+    telegram_bot_username: str | None = Field(
+        default=None,
+        description=(
+            "Telegram bot username without @, used to build t.me invite deep links "
+            "(``AUREY_TELEGRAM_BOT_USERNAME``)."
+        ),
+        validation_alias=AliasChoices("AUREY_TELEGRAM_BOT_USERNAME"),
+    )
+    hosted_send_invite_ttl_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Days until a send-to-invite deep link expires.",
+        validation_alias=AliasChoices("AUREY_HOSTED_SEND_INVITE_TTL_DAYS"),
+    )
     telegram_allowed_chat_ids: str | None = Field(
         default=None,
         description=(

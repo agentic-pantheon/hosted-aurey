@@ -26,6 +26,15 @@ class HostedAccessRequestError(ValueError):
     """Invalid user input during the access-request flow."""
 
 
+def normalize_telegram_username(raw: str) -> str | None:
+    """Strip ``@`` and whitespace; return lowercase handle or ``None`` if empty."""
+
+    s = (raw or "").strip().lstrip("@").strip()
+    if not s:
+        return None
+    return s.lower()
+
+
 def format_telegram_handle(*, telegram_username: str | None, telegram_user_id: int) -> str:
     if telegram_username and str(telegram_username).strip():
         handle = str(telegram_username).strip().lstrip("@")
@@ -280,6 +289,7 @@ __all__ = [
     "clear_telegram_access_request_flow",
     "delete_telegram_access_request",
     "format_telegram_handle",
+    "normalize_telegram_username",
     "get_pending_access_request",
     "mark_telegram_access_request_awaiting_email",
     "require_contact_email",

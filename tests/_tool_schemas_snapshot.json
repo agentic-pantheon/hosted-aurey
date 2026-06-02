@@ -735,6 +735,22 @@
     "title": "RequestUserInputArgs",
     "type": "object"
   },
+  "resolve_hosted_recipient_by_handle": {
+    "description": "Look up another hosted Aurey user's EVM wallet by Telegram @handle.",
+    "properties": {
+      "telegram_handle": {
+        "description": "Recipient Telegram username, with or without leading @.",
+        "minLength": 1,
+        "title": "Telegram Handle",
+        "type": "string"
+      }
+    },
+    "required": [
+      "telegram_handle"
+    ],
+    "title": "ResolveHostedRecipientArgs",
+    "type": "object"
+  },
   "resolve_known_address": {
     "description": "Map a known ticker to a contract address (allowlist; no Alchemy call).",
     "properties": {

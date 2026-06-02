@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 HOSTED_SIGNING_CONTEXT_REQUIRED_CODE = "hosted_signing_context_required"
 
@@ -18,6 +18,8 @@ __all__ = [
     "hosted_signing_missing_context_graph_error",
     "hosted_signing_missing_context_tool_error",
     "hosted_signing_context_scope",
+    "aurey_invoke_context_scope",
+    "current_aurey_invoke_context",
     "hosted_telegram_user_id_scope",
 ]
 
@@ -75,6 +77,11 @@ current_hosted_telegram_user_id: ContextVar[int | None] = ContextVar(
     default=None,
 )
 
+current_aurey_invoke_context: ContextVar[Mapping[str, Any] | None] = ContextVar(
+    "current_aurey_invoke_context",
+    default=None,
+)
+
 
 @contextmanager
 def hosted_signing_context_scope(ctx: HostedSigningContext) -> Iterator[None]:
@@ -85,6 +92,17 @@ def hosted_signing_context_scope(ctx: HostedSigningContext) -> Iterator[None]:
         yield
     finally:
         current_hosted_signing_context.reset(token)
+
+
+@contextmanager
+def aurey_invoke_context_scope(context: Mapping[str, Any] | None) -> Iterator[None]:
+    """Bind per-turn invoke context (survives tool threads when set at invoke entry)."""
+
+    token = current_aurey_invoke_context.set(context)
+    try:
+        yield
+    finally:
+        current_aurey_invoke_context.reset(token)
 
 
 @contextmanager

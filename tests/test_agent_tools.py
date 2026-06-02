@@ -111,6 +111,8 @@ def test_tool_schemas_include_expected_names_and_descriptions():
         "tx_prepare_erc20_transfer",
         "tx_prepare_erc20_approval",
         "tx_execute",
+        "resolve_hosted_recipient_by_handle",
+        "get_hosted_wallet_addresses",
         "request_user_input",
     }
     assert expected <= names

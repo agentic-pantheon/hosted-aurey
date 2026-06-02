@@ -20,6 +20,12 @@ Verification and claim messages use branded HTML (purple/gold layout, inline Aur
 
 Set **`AUREY_HOSTED_REQUIRE_VERIFIED_EMAIL=false`** only to keep the legacy synthetic `tg_<id>@domain` upsert without inbox verification (tests and old scripts use this).
 
+## 1c. Send to Aurey users by Telegram @handle
+
+Hosted users with a persisted **`wallet_address`** can receive ERC-20/native transfers when the agent resolves their **`telegram_username`** via **`resolve_hosted_recipient_by_handle`** (case-insensitive). If the handle is unknown, the tool may return **`invite_deeplink`** when **`AUREY_TELEGRAM_BOT_USERNAME`** is set (see **`AUREY_HOSTED_SEND_INVITE_TTL_DAYS`**). Recipients who open `t.me/<bot>?start=inv_<token>` must use the **same Telegram @username** the sender targeted; otherwise the invite is not consumed. On success, Aurey records **`hosted_handle_claims`**: that @handle maps to their **`telegram_user_id`** for future sends (even if they change username later). Resolve shows `telegram_user_id` and `recipient_binding_note` when the claim registry is used.
+
+After a successful peer **`tx_execute`**, Aurey may DM the recipient’s **`telegram_user_id`**—only if they have already started a chat with the bot (Telegram does not allow cold DMs).
+
 ## 2. Define a provisioning template (sketch)
 
 Author a **template** JSON (exact schema per Platform docs) that describes:
