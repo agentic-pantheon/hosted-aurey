@@ -28,6 +28,7 @@ CHAIN_INDEX: dict[str, ChainInfo] = {
     "optimism": ChainInfo("optimism", 10, "opt-mainnet"),
     "plasma": ChainInfo("plasma", 9745, "plasma-mainnet"),
     "polygon": ChainInfo("polygon", 137, "polygon-mainnet"),
+    "robinhood": ChainInfo("robinhood", 4663, "robinhood-mainnet"),
     "scroll": ChainInfo("scroll", 534352, "scroll-mainnet"),
     "sonic": ChainInfo("sonic", 146, "sonic-mainnet"),
     "unichain": ChainInfo("unichain", 130, "unichain-mainnet"),
