@@ -102,22 +102,33 @@ class TokenRegistryRepository:
             return None
         return _orm_to_row(rows[0])
 
-    def list_allowlist_rows(self, *, chain_slug: str | None = None) -> list[TokenRow]:
-        """All curated/indexed rows, optionally filtered to one chain slug."""
+    def list_registry_rows(
+        self,
+        *,
+        chain_slug: str | None = None,
+        trust_tiers: frozenset[str] | None = ALLOWLIST_TIERS,
+    ) -> list[TokenRow]:
+        """Registry rows, optionally filtered by chain and trust tier set (``None`` = all tiers)."""
 
         slug_filter = chain_slug.strip().lower() if chain_slug else None
         with self._session_factory() as session:
-            stmt = select(TokenRegistryORM).where(
-                TokenRegistryORM.trust_tier.in_(tuple(ALLOWLIST_TIERS)),
-            )
+            stmt = select(TokenRegistryORM)
+            if trust_tiers is not None:
+                stmt = stmt.where(TokenRegistryORM.trust_tier.in_(tuple(trust_tiers)))
             if slug_filter is not None:
                 stmt = stmt.where(TokenRegistryORM.chain_slug == slug_filter)
             stmt = stmt.order_by(
                 TokenRegistryORM.chain_slug.asc(),
                 TokenRegistryORM.symbol.asc(),
+                TokenRegistryORM.address.asc(),
             )
             rows = session.scalars(stmt).all()
         return [_orm_to_row(r) for r in rows]
+
+    def list_allowlist_rows(self, *, chain_slug: str | None = None) -> list[TokenRow]:
+        """All curated/indexed rows, optionally filtered to one chain slug."""
+
+        return self.list_registry_rows(chain_slug=chain_slug, trust_tiers=ALLOWLIST_TIERS)
 
     def apply_lifi_supported_flags(
         self,

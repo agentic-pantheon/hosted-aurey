@@ -55,6 +55,7 @@ TODOS
 
 # Local LiFi catalog export (operator curl); sync job uses live API
 li_quest_tokens.json
+token_registry_mcp_export.json
 
 # JavaScript (Mini App)
 node_modules/
